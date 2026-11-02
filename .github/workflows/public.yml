@@ -1,0 +1,112 @@
+name: g-eBAR public
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+      hid_version: ${{ steps.metadata.outputs.hid_version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      - name: Read version
+        id: metadata
+        shell: pwsh
+        env:
+          BUILD_REF: ${{ github.ref }}
+          BUILD_SHA: ${{ github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          [xml]$props = Get-Content Directory.Build.props -Raw
+          $version = [string]$props.Project.PropertyGroup.Version
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Expected a major.minor.patch version.' }
+          if ($env:BUILD_REF.StartsWith('refs/tags/') -and $env:BUILD_REF -ne "refs/tags/v$version") {
+            throw 'The release tag must match Directory.Build.props.'
+          }
+          $hidVersion = (Get-Date -Format 'dd.MM') + '-hid-' + $env:BUILD_SHA.Substring(0, 5).ToUpperInvariant()
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "hid_version=$hidVersion" >> $env:GITHUB_OUTPUT
+      - name: Test solution
+        run: dotnet test g-eBAR.sln -c Release --nologo --disable-build-servers -m:1 -p:ReleaseChannel=Public -p:ContinuousIntegrationBuild=true
+      - name: Publish applications
+        shell: pwsh
+        env:
+          BUILD_SHA: ${{ github.sha }}
+          HID_VERSION: ${{ steps.metadata.outputs.hid_version }}
+        run: |
+          dotnet publish GeBar.App/GeBar.App.csproj -c Release -r win-x64 --self-contained true --nologo --disable-build-servers -m:1 -o artifacts/app -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false -p:ReleaseChannel=Public -p:Nightly=false -p:RepositoryUrl=https://github.com/loismedia/g-eBAR -p:SourceRevisionId=$env:BUILD_SHA -p:ContinuousIntegrationBuild=true
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet publish GeBar.HidApp/GeBar.HidApp.csproj -c Release -r win-x64 --self-contained true --nologo --disable-build-servers -m:1 -o artifacts/hid -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false -p:ReleaseChannel=Public -p:Nightly=false -p:RepositoryUrl=https://github.com/loismedia/g-eBAR -p:SourceRevisionId=$env:BUILD_SHA -p:InformationalVersion=$env:HID_VERSION -p:ContinuousIntegrationBuild=true
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Smoke test applications
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($path in @('artifacts/app/g-eBAR.exe', 'artifacts/hid/g-eHID.exe')) {
+            $process = Start-Process -FilePath (Resolve-Path $path).Path -ArgumentList '--ui-smoke-test' -PassThru -WindowStyle Hidden
+            if (-not $process.WaitForExit(60000)) { $process.Kill(); throw "UI check timed out: $path" }
+            if ($process.ExitCode -ne 0) { throw "UI check failed: $path, exit $($process.ExitCode)" }
+          }
+      - name: Prepare distribution
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory artifacts/release -Force | Out-Null
+          Copy-Item artifacts/app/g-eBAR.exe, artifacts/hid/g-eHID.exe artifacts/release/
+          Get-FileHash artifacts/release/*.exe -Algorithm SHA256 | ForEach-Object {
+            $_.Hash.ToLowerInvariant() + '  ' + (Split-Path $_.Path -Leaf)
+          } | Set-Content artifacts/release/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: g-eBAR-win-x64
+          path: artifacts/release/
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
+        with:
+          name: g-eBAR-win-x64
+          path: artifacts/release
+      - name: Publish versioned release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+          HID_VERSION: ${{ needs.build.outputs.hid_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo 'A release with this tag already exists. Publish a new version instead.'
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" artifacts/release/g-eBAR.exe artifacts/release/g-eHID.exe artifacts/release/SHA256SUMS.txt --verify-tag --title "g-eBAR v$RELEASE_VERSION" --notes "g-eHID: $HID_VERSION" --generate-notes --draft
+          gh release edit "$RELEASE_TAG" --draft=false --latest

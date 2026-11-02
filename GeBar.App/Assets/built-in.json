@@ -1,0 +1,30 @@
+{
+  "FormatVersion": 1,
+  "ExportedAt": "2026-08-08T00:00:00+03:00",
+  "Devices": [
+    {
+      "Id": "built-in",
+      "Name": "Logitech G PRO X 2",
+      "VendorId": 1133,
+      "ProductId": 2807,
+      "Manufacturer": "Logitech",
+      "Interfaces": [],
+      "Battery": {
+        "RequestHex": "510800031A000300040A000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "PercentageOffset": 10,
+        "ChargingOffset": 12,
+        "ChargingValue": 2,
+        "Source": 2,
+        "MatchPrefixHex": "0B000310",
+        "RequestKind": 2,
+        "RequestReportLength": 64,
+        "ResponseDelayMs": 100,
+        "RequestRetries": 8,
+        "ProtocolName": "Logitech Gaming 0x51",
+        "OffPrefixHex": "050003000000",
+        "BluetoothNames": ["PRO X 2", "G PRO X"]
+      },
+      "IsVerified": true
+    }
+  ]
+}

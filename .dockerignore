@@ -1,0 +1,12 @@
+.git
+.github
+.vs
+**/bin
+**/obj
+artifacts
+public
+*.user
+*.suo
+*.log
+Dockerfile*
+README.md

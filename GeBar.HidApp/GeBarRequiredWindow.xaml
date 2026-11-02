@@ -1,0 +1,18 @@
+<Window x:Class="GeBar.HidApp.GeBarRequiredWindow" x:ClassModifier="internal"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:GeBar.HidApp"
+        Title="{x:Static local:Strings.AppName}" Width="440" SizeToContent="Height"
+        ResizeMode="NoResize" WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource WindowBackground}" Foreground="{DynamicResource PrimaryText}"
+        FontFamily="Segoe UI Variable Text" FontSize="14" UseLayoutRounding="True" SnapsToDevicePixels="True">
+    <Window.Resources><ResourceDictionary><ResourceDictionary.MergedDictionaries><ResourceDictionary Source="GeBarTheme.xaml"/></ResourceDictionary.MergedDictionaries></ResourceDictionary></Window.Resources>
+    <StackPanel Margin="22,18,22,18">
+        <TextBlock Text="{x:Static local:Strings.GeBarRequiredTitle}" FontFamily="Segoe UI Variable Display" FontSize="20" FontWeight="SemiBold"/>
+        <TextBlock Text="{x:Static local:Strings.GeBarRequiredText}" TextWrapping="Wrap" Margin="0,10,0,0"/>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
+            <Button x:Name="CloseButton" Content="{x:Static local:Strings.Close}" MinWidth="110" Margin="0,0,8,0" Click="CloseClick"/>
+            <Button x:Name="DownloadButton" Content="{x:Static local:Strings.DownloadGeBar}" Style="{StaticResource PrimaryButton}" MinWidth="150" Click="DownloadClick"/>
+        </StackPanel>
+    </StackPanel>
+</Window>

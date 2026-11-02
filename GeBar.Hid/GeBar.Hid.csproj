@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0-windows</TargetFramework><RootNamespace>GeBar.Hid</RootNamespace><AllowUnsafeBlocks>true</AllowUnsafeBlocks></PropertyGroup>
+  <ItemGroup><ProjectReference Include="..\GeBar.Core\GeBar.Core.csproj" /><PackageReference Include="HidSharp" Version="2.6.4" /><InternalsVisibleTo Include="GeBar.Tests" /></ItemGroup>
+</Project>

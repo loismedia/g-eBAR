@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework><UseWPF>true</UseWPF><ApplicationIcon>Assets\g-e.ico</ApplicationIcon>
+    <AssemblyName>g-eBAR</AssemblyName><RootNamespace>GeBar.App</RootNamespace><Product>g-eBAR</Product><Title>g-eBAR</Title>
+    <Company>Lois Media</Company><PublisherName>Lois Media</PublisherName><Authors>lucz</Authors><Copyright>Copyright © Lois Media</Copyright>
+    <Description>Battery monitor for wireless devices</Description><AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+  <ItemGroup><ProjectReference Include="..\GeBar.Core\GeBar.Core.csproj" /><ProjectReference Include="..\GeBar.UI\GeBar.UI.csproj" /><ProjectReference Include="..\GeBar.Hid\GeBar.Hid.csproj" /></ItemGroup>
+  <ItemGroup><EmbeddedResource Include="Assets\g-e.ico" LogicalName="GeBar.App.g-e.ico" /><EmbeddedResource Include="Assets\built-in.json" LogicalName="GeBar.App.built-in.json" /></ItemGroup>
+  <ItemGroup><InternalsVisibleTo Include="GeBar.Tests" /></ItemGroup>
+  <ItemGroup><AssemblyMetadata Include="Publisher" Value="Lois Media" /><AssemblyMetadata Include="Developer" Value="lucz" /></ItemGroup>
+  <ItemGroup Condition="'$(RepositoryUrl)' != ''"><AssemblyMetadata Include="RepositoryUrl" Value="$(RepositoryUrl)" /></ItemGroup>
+</Project>

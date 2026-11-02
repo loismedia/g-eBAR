@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>GeBar.HidApp</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>g-eHID</AssemblyName>
+    <Company>Lois Media</Company>
+    <Authors>lucz</Authors>
+    <Product>g-eHID</Product>
+    <Title>g-eHID</Title>
+    <ApplicationIcon>Assets\g-eHID.ico</ApplicationIcon>
+    <PublisherName>Lois Media</PublisherName>
+    <Copyright>Copyright © Lois Media</Copyright>
+    <Description>HID explorer and profile builder for g-eBAR</Description>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+  <ItemGroup><AssemblyMetadata Include="Publisher" Value="Lois Media" /><AssemblyMetadata Include="Developer" Value="lucz" /></ItemGroup>
+  <ItemGroup Condition="'$(RepositoryUrl)' != ''"><AssemblyMetadata Include="RepositoryUrl" Value="$(RepositoryUrl)" /></ItemGroup>
+  <ItemGroup><EmbeddedResource Include="..\GeBar.App\Assets\built-in.json" LogicalName="GeBar.HidApp.built-in.json" /></ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\GeBar.Core\GeBar.Core.csproj" /><ProjectReference Include="..\GeBar.UI\GeBar.UI.csproj" />
+    <ProjectReference Include="..\GeBar.Hid\GeBar.Hid.csproj" />
+  </ItemGroup>
+</Project>
