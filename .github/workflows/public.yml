@@ -17,75 +17,86 @@ concurrency:
 
 jobs:
   build:
-    runs-on: windows-latest
-    timeout-minutes: 25
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, loispg]
+    timeout-minutes: 30
     outputs:
       version: ${{ steps.metadata.outputs.version }}
       hid_version: ${{ steps.metadata.outputs.hid_version }}
+      build_time: ${{ steps.verify.outputs.build_time }}
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: 10.0.x
       - name: Read version
         id: metadata
-        shell: pwsh
-        env:
-          BUILD_REF: ${{ github.ref }}
-          BUILD_SHA: ${{ github.sha }}
+        shell: bash
         run: |
-          $ErrorActionPreference = 'Stop'
-          [xml]$props = Get-Content Directory.Build.props -Raw
-          $version = [string]$props.Project.PropertyGroup.Version
-          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Expected a major.minor.patch version.' }
-          if ($env:BUILD_REF.StartsWith('refs/tags/') -and $env:BUILD_REF -ne "refs/tags/v$version") {
-            throw 'The release tag must match Directory.Build.props.'
-          }
-          $hidVersion = (Get-Date -Format 'dd.MM') + '-hid-' + $env:BUILD_SHA.Substring(0, 5).ToUpperInvariant()
-          "version=$version" >> $env:GITHUB_OUTPUT
-          "hid_version=$hidVersion" >> $env:GITHUB_OUTPUT
-      - name: Test solution
-        run: dotnet test g-eBAR.sln -c Release --nologo --disable-build-servers -m:1 -p:ReleaseChannel=Public -p:ContinuousIntegrationBuild=true
-      - name: Publish applications
-        shell: pwsh
-        env:
-          BUILD_SHA: ${{ github.sha }}
-          HID_VERSION: ${{ steps.metadata.outputs.hid_version }}
+          set -euo pipefail
+          version=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' Directory.Build.props | head -n 1)
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo 'Expected a major.minor.patch version.'
+            exit 1
+          fi
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF" != "refs/tags/v$version" ]]; then
+            echo 'The release tag must match Directory.Build.props.'
+            exit 1
+          fi
+          suffix="${GITHUB_SHA:0:5}"
+          hid_version="$(TZ='Europe/Moscow' date '+%d.%m')-hid-${suffix^^}"
+          printf 'version=%s\nhid_version=%s\n' "$version" "$hid_version" >> "$GITHUB_OUTPUT"
+      - name: Lint Dockerfile
+        shell: bash
         run: |
-          dotnet publish GeBar.App/GeBar.App.csproj -c Release -r win-x64 --self-contained true --nologo --disable-build-servers -m:1 -o artifacts/app -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false -p:ReleaseChannel=Public -p:Nightly=false -p:RepositoryUrl=https://github.com/loismedia/g-eBAR -p:SourceRevisionId=$env:BUILD_SHA -p:ContinuousIntegrationBuild=true
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          dotnet publish GeBar.HidApp/GeBar.HidApp.csproj -c Release -r win-x64 --self-contained true --nologo --disable-build-servers -m:1 -o artifacts/hid -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false -p:ReleaseChannel=Public -p:Nightly=false -p:RepositoryUrl=https://github.com/loismedia/g-eBAR -p:SourceRevisionId=$env:BUILD_SHA -p:InformationalVersion=$env:HID_VERSION -p:ContinuousIntegrationBuild=true
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Smoke test applications
-        shell: pwsh
+          docker run --rm -i hadolint/hadolint:v2.14.0 hadolint --failure-threshold error - < Dockerfile
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+        with:
+          name: loispg-gebar-public
+          driver: docker-container
+          keep-state: true
+          buildkitd-config-inline: |
+            [worker.oci]
+              gc = true
+              reservedSpace = "2GB"
+              maxUsedSpace = "12GB"
+              minFreeSpace = "10GB"
+      - name: Build Windows artifacts in Linux container
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: artifact
+          build-args: |
+            REPOSITORY_URL=${{ github.server_url }}/${{ github.repository }}
+            APP_VERSION=v${{ steps.metadata.outputs.version }}
+            NIGHTLY=false
+            PUBLISH_HID=true
+            HID_VERSION=${{ steps.metadata.outputs.hid_version }}
+            SOURCE_REVISION=${{ github.sha }}
+          outputs: type=local,dest=./artifacts/g-eBAR-win-x64
+      - name: Verify artifacts
+        id: verify
+        shell: bash
         run: |
-          $ErrorActionPreference = 'Stop'
-          foreach ($path in @('artifacts/app/g-eBAR.exe', 'artifacts/hid/g-eHID.exe')) {
-            $process = Start-Process -FilePath (Resolve-Path $path).Path -ArgumentList '--ui-smoke-test' -PassThru -WindowStyle Hidden
-            if (-not $process.WaitForExit(60000)) { $process.Kill(); throw "UI check timed out: $path" }
-            if ($process.ExitCode -ne 0) { throw "UI check failed: $path, exit $($process.ExitCode)" }
-          }
-      - name: Prepare distribution
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory artifacts/release -Force | Out-Null
-          Copy-Item artifacts/app/g-eBAR.exe, artifacts/hid/g-eHID.exe artifacts/release/
-          Get-FileHash artifacts/release/*.exe -Algorithm SHA256 | ForEach-Object {
-            $_.Hash.ToLowerInvariant() + '  ' + (Split-Path $_.Path -Leaf)
-          } | Set-Content artifacts/release/SHA256SUMS.txt
+          set -euo pipefail
+          test -s artifacts/g-eBAR-win-x64/g-eBAR.exe
+          test -s artifacts/g-eBAR-win-x64/g-eHID.exe
+          cd artifacts/g-eBAR-win-x64
+          sha256sum g-eBAR.exe g-eHID.exe > SHA256SUMS.txt
+          printf 'build_time=%s\n' "$(TZ='Europe/Moscow' date '+%Y-%m-%d %H:%M:%S UTC+3')" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v7
         with:
           name: g-eBAR-win-x64
-          path: artifacts/release/
+          path: |
+            artifacts/g-eBAR-win-x64/*.exe
+            artifacts/g-eBAR-win-x64/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, loispg]
     timeout-minutes: 10
     permissions:
       contents: write
@@ -95,18 +106,50 @@ jobs:
         with:
           name: g-eBAR-win-x64
           path: artifacts/release
-      - name: Publish versioned release
+      - name: Check release does not already exist
+        uses: actions/github-script@v8
         env:
-          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-          RELEASE_VERSION: ${{ needs.build.outputs.version }}
-          HID_VERSION: ${{ needs.build.outputs.hid_version }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            echo 'A release with this tag already exists. Publish a new version instead.'
-            exit 1
-          fi
-          gh release create "$RELEASE_TAG" artifacts/release/g-eBAR.exe artifacts/release/g-eHID.exe artifacts/release/SHA256SUMS.txt --verify-tag --title "g-eBAR v$RELEASE_VERSION" --notes "g-eHID: $HID_VERSION" --generate-notes --draft
-          gh release edit "$RELEASE_TAG" --draft=false --latest
+        with:
+          script: |
+            try {
+              await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag: process.env.RELEASE_TAG
+              });
+              core.setFailed('A release with this tag already exists. Publish a new version instead.');
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+      - name: Prepare versioned release
+        id: release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: g-eBAR v${{ needs.build.outputs.version }}
+          body: |
+            g-eHID: ${{ needs.build.outputs.hid_version }}
+
+            Built: ${{ needs.build.outputs.build_time }}
+          files: |
+            artifacts/release/g-eBAR.exe
+            artifacts/release/g-eHID.exe
+            artifacts/release/SHA256SUMS.txt
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          overwrite_files: false
+          draft: true
+      - name: Publish versioned release
+        uses: actions/github-script@v8
+        env:
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+        with:
+          script: |
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: Number(process.env.RELEASE_ID),
+              draft: false,
+              make_latest: 'true'
+            });

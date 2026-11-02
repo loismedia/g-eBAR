@@ -26,6 +26,15 @@ COPY GeBar.Hid/ GeBar.Hid/
 COPY GeBar.UI/ GeBar.UI/
 COPY GeBar.App/ GeBar.App/
 COPY GeBar.HidApp/ GeBar.HidApp/
+COPY GeBar.Tests/ GeBar.Tests/
+
+RUN --mount=type=cache,id=gebar-nuget,target=/root/.nuget/packages,sharing=locked \
+    dotnet build GeBar.Tests/GeBar.Tests.csproj \
+    --configuration Release \
+    --runtime win-x64 \
+    --no-restore \
+    --nologo \
+    -p:ContinuousIntegrationBuild=true
 
 RUN --mount=type=cache,id=gebar-nuget,target=/root/.nuget/packages,sharing=locked \
     VERSION="${APP_VERSION#v}" && VERSION_PROPERTY="" && if [ -n "$VERSION" ]; then VERSION_PROPERTY="-p:Version=$VERSION"; fi && dotnet publish GeBar.App/GeBar.App.csproj \

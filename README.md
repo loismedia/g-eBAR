@@ -115,7 +115,7 @@ dotnet test g-eBAR.sln -c Release --disable-build-servers -m:1
 dotnet publish GeBar.App/GeBar.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
 ```
 
-Pushes and pull requests run tests, build both applications and check their windows. Build artifacts are available in GitHub Actions. A `vX.Y.Z` tag matching `Directory.Build.props` publishes a release. Previous releases and version tags are retained. Version history comes from GitHub Releases.
+Pushes and pull requests from this repository compile the tests and build both Windows applications in a Linux Docker container on the self-hosted `loispg` runner. Run tests and UI smoke checks locally on Windows. Build artifacts are available in GitHub Actions. A `vX.Y.Z` tag matching `Directory.Build.props` publishes a release. Previous releases and version tags are retained. Version history comes from GitHub Releases.
 
 ## Credits
 
