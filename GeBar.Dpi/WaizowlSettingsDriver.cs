@@ -7,6 +7,10 @@ namespace GeBar.Dpi;
 
 public sealed class WaizowlSettingsDriver(IAppLogger logger) : IMouseSettingsDriver
 {
+    private readonly Func<int, int, IEnumerable<HidDevice>> _devices = (vendor, product) => DeviceList.Local.GetHidDevices(vendor, product);
+
+    internal WaizowlSettingsDriver(IAppLogger logger, Func<int, int, IEnumerable<HidDevice>> devices) : this(logger) => _devices = devices;
+
     public MouseSettingsCapabilities Capabilities { get; private set; } = Limits(true, 30000);
 
     public bool Supports(HidDeviceProfile device) => device.AllConnections().Any(connection => connection.VendorId == 0x1915 && SupportedProduct(connection.ProductId));
@@ -155,21 +159,46 @@ public sealed class WaizowlSettingsDriver(IAppLogger logger) : IMouseSettingsDri
     private async Task<MouseSettings> UseDevice(HidDeviceProfile device, Func<HidStream, int, CancellationToken, Task<MouseSettings>> action, CancellationToken token, bool readOnly = false)
     {
         if (!Supports(device)) throw new NotSupportedException(Text.Unsupported);
+        bool attempted = false;
         foreach (HidDeviceConnectionProfile connection in device.AllConnections()
             .Where(connection => connection.VendorId == 0x1915 && SupportedProduct(connection.ProductId)).OrderBy(connection => connection.ProductId == 0x0728 ? 1 : 0))
         {
-            foreach (HidDevice handle in DeviceList.Local.GetHidDevices(connection.VendorId, connection.ProductId))
+            HidDevice[] handles = [.. _devices(connection.VendorId, connection.ProductId)];
+            foreach (HidProbeTarget target in HidDeviceScanner.Pair(connection.Interfaces, handles)
+                .OrderByDescending(target => string.Equals(target.Interface.DevicePath, connection.Battery.DevicePath, StringComparison.OrdinalIgnoreCase)))
             {
-                if (HidDeviceScanner.TopUsagePage(handle) != 0xFF0A || HidDeviceScanner.InputLengthOf(handle) != 65 || OutputLength(handle) != 65) continue;
+                HidDevice handle = target.Handle;
+                var descriptor = target.Interface with
+                {
+                    UsagePage = HidDeviceScanner.TopUsagePage(handle) ?? target.Interface.UsagePage,
+                    InputReportLength = HidDeviceScanner.InputLengthOf(handle),
+                    OutputReportLength = OutputLength(handle)
+                };
+                bool supported = IsSettingsInterface(descriptor, connection.Battery);
+                if (logger.IsRawPacketLoggingEnabled)
+                    logger.Info($"g-eDPI: Waizowl interface {connection.VendorId:X4}:{connection.ProductId:X4}, IN={descriptor.InputReportLength}, OUT={descriptor.OutputReportLength}, usagePage={descriptor.UsagePage?.ToString("X4") ?? "unknown"}, settings={supported}, path={descriptor.DevicePath}");
+                if (!supported) continue;
                 using HidStream? stream = HidRequestExchange.TryOpenShared(handle);
-                if (stream is null) continue;
+                if (stream is null)
+                {
+                    logger.Warning($"g-eDPI: Waizowl settings interface could not be opened, path={descriptor.DevicePath}");
+                    continue;
+                }
+                attempted = true;
                 logger.Info($"g-eDPI: opening Waizowl {connection.VendorId:X4}:{connection.ProductId:X4}, path={HidDeviceScanner.PathOf(handle)}");
                 try { return await action(stream, connection.ProductId, token).ConfigureAwait(false); }
                 catch (IOException error) when (readOnly) { logger.Warning($"g-eDPI: Waizowl settings read failed: {error.Message}"); }
             }
         }
-        throw new IOException(Text.Unavailable);
+        throw new IOException(attempted ? Text.Unavailable : Text.InterfaceUnavailable);
     }
+
+    internal static bool IsSettingsInterface(HidInterfaceProfile descriptor, HidBatteryProtocolProfile battery) =>
+        descriptor.InputReportLength == 65 && descriptor.OutputReportLength == 65
+        && (descriptor.UsagePage >= 0xFF00
+            || descriptor.UsagePage is null && battery.Source == HidBatterySource.VendorProtocol && battery.RequestKind == HidRequestKind.Output
+                && battery.ProtocolName is "Waizowl status 0x41 (OGM family)" or "Waizowl status 0x01 (OGM wired)"
+                && string.Equals(descriptor.DevicePath, battery.DevicePath, StringComparison.OrdinalIgnoreCase));
 
     private static int OutputLength(HidDevice device)
     {

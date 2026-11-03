@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Threading.Channels;
 using GeBar.Core;
 using GeBar.Dpi;
+using HidSharp;
 
 namespace GeBar.Tests;
 
@@ -145,6 +146,97 @@ public class WaizowlSettingsTests
         Assert.True(driver.Supports(profile));
         Assert.False(driver.Supports(profile with { ProductId = 0xFFFF }));
         Assert.False(driver.Supports(profile with { VendorId = 0xFFFF }));
+    }
+
+    [Theory]
+    [InlineData(0xFF00)]
+    [InlineData(0xFF0A)]
+    [InlineData(0xFF31)]
+    public async Task DeviceEntryPointReadsAndSavesThroughVendorInterface(int usagePage)
+    {
+        var requested = Original with { PollingRate = 2000 };
+        using var firmware = new Firmware([
+            Receiver("F5070000"), Status(Original), Sensor(Original, 29),
+            Receiver("F5070000"), Status(Original), Sensor(Original, 29), Packet(0x44, 2),
+            Receiver("F5070000"), Status(requested), Sensor(requested, 29)
+        ]);
+        var keyboard = new TestDevice("keyboard-" + Guid.NewGuid(), firmware);
+        var mouse = new TestDevice("vendor-" + Guid.NewGuid(), firmware);
+        HidDeviceProfile profile = new("ogm", "OGM 8K", 0x1915, 0x0728, null, null,
+            [new(keyboard.DevicePath, 65, 65, 0, 1), new(mouse.DevicePath, 65, 65, 0, usagePage)],
+            Battery(mouse.DevicePath));
+        var driver = new WaizowlSettingsDriver(new Logger(), (_, _) => [keyboard, mouse]);
+
+        MouseSettings read = await driver.ReadAsync(profile, CancellationToken.None);
+        MouseSettings saved = await driver.SaveAsync(profile, read, requested, CancellationToken.None);
+
+        Assert.Equal(Original, read);
+        Assert.Equal(requested, saved);
+        Assert.Equal(0, keyboard.Opens);
+        Assert.Equal(2, mouse.Opens);
+        Assert.Equal(4, Assert.Single(firmware.Requests, packet => packet[1] == 0x44 && packet[4] == 2)[6]);
+    }
+
+    [Fact]
+    public async Task VerifiedBatteryInterfaceWorksWhenUsageDescriptorIsUnavailable()
+    {
+        using var firmware = new Firmware([Receiver("F5070000"), Status(Original), Sensor(Original, 29)]);
+        var mouse = new TestDevice("vendor-" + Guid.NewGuid(), firmware);
+        HidDeviceProfile profile = new("ogm", "OGM 8K", 0x1915, 0x0728, null, null,
+            [new(mouse.DevicePath, 65, 65, 0)], Battery(mouse.DevicePath));
+        var driver = new WaizowlSettingsDriver(new Logger(), (_, _) => [mouse]);
+
+        Assert.Equal(Original, await driver.ReadAsync(profile, CancellationToken.None));
+        Assert.Equal(1, mouse.Opens);
+    }
+
+    [Theory]
+    [InlineData(1, 65, 65, true, false)]
+    [InlineData(12, 65, 65, true, false)]
+    [InlineData(0xFF00, 8, 65, true, false)]
+    [InlineData(0xFF00, 65, 8, true, false)]
+    [InlineData(null, 65, 65, false, false)]
+    [InlineData(null, 65, 65, true, true)]
+    [InlineData(0xFF00, 65, 65, false, true)]
+    public void InterfaceSelectionRequiresVendorReportsOrVerifiedProtocol(int? usagePage, int input, int output, bool known, bool expected)
+    {
+        HidBatteryProtocolProfile battery = known ? Battery("device") : new();
+        var descriptor = new HidInterfaceProfile("device", input, output, 0, usagePage);
+
+        Assert.Equal(expected, WaizowlSettingsDriver.IsSettingsInterface(descriptor, battery));
+    }
+
+    private static HidBatteryProtocolProfile Battery(string path) => new(Source: HidBatterySource.VendorProtocol, RequestKind: HidRequestKind.Output,
+        DevicePath: path, ProtocolName: "Waizowl status 0x41 (OGM family)");
+
+    private sealed class TestDevice(string path, Firmware firmware) : HidDevice
+    {
+        public int Opens { get; private set; }
+        public override int VendorID => 0x1915;
+        public override int ProductID => 0x0728;
+        public override int ReleaseNumberBcd => 0;
+        public override string DevicePath => path;
+        public override string GetFileSystemName() => path;
+        public override int GetMaxInputReportLength() => 65;
+        public override int GetMaxOutputReportLength() => 65;
+        public override int GetMaxFeatureReportLength() => 0;
+        protected override DeviceStream OpenDeviceDirectly(OpenConfiguration configuration)
+        {
+            Opens++;
+            return new TestStream(this, firmware);
+        }
+    }
+
+    private sealed class TestStream(TestDevice device, Firmware firmware) : HidStream(device)
+    {
+        public override int ReadTimeout { get; set; } = 1000;
+        public override int WriteTimeout { get; set; } = 1000;
+        public override void GetFeature(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override void SetFeature(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) => firmware.ReadAsync(buffer, cancellationToken);
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default) => firmware.WriteAsync(buffer, cancellationToken);
     }
 
     private static byte[] Packet(byte command, byte operation)
