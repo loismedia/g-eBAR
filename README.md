@@ -129,7 +129,7 @@ Logs are stored in `%LocalAppData%\g-eBAR\Logs`, limited to 1 MB per file and 10
 Build and run tests on Windows with .NET SDK 10:
 
 ```powershell
-dotnet test g-eBAR.sln -c Release --disable-build-servers -m:1
+dotnet test g-eBAR.slnx -c Release --disable-build-servers -m:1
 dotnet publish GeBar.App/GeBar.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
 ```
 

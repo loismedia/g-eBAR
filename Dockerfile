@@ -10,7 +10,7 @@ ARG SOURCE_REVISION
 
 WORKDIR /source
 
-COPY Directory.Build.props g-eBAR.sln ./
+COPY Directory.Build.props g-eBAR.slnx ./
 COPY GeBar.Core/GeBar.Core.csproj GeBar.Core/
 COPY GeBar.Hid/GeBar.Hid.csproj GeBar.Hid/
 COPY GeBar.UI/GeBar.UI.csproj GeBar.UI/
@@ -19,7 +19,7 @@ COPY GeBar.HidApp/GeBar.HidApp.csproj GeBar.HidApp/
 COPY GeBar.Tests/GeBar.Tests.csproj GeBar.Tests/
 
 RUN --mount=type=cache,id=gebar-nuget,target=/root/.nuget/packages,sharing=locked \
-    dotnet restore g-eBAR.sln --runtime win-x64 -p:ContinuousIntegrationBuild=true
+    dotnet restore g-eBAR.slnx --runtime win-x64 -p:ContinuousIntegrationBuild=true
 
 COPY GeBar.Core/ GeBar.Core/
 COPY GeBar.Hid/ GeBar.Hid/

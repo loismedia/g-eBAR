@@ -1,0 +1,21 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Folder Name="/Solution Items/">
+    <File Path=".github/workflows/public.yml" />
+    <File Path=".gitignore" />
+    <File Path="Directory.Build.props" />
+    <File Path="Dockerfile" />
+    <File Path="LICENSE" />
+    <File Path="README.md" />
+  </Folder>
+  <Project Path="GeBar.App/GeBar.App.csproj" />
+  <Project Path="GeBar.Core/GeBar.Core.csproj" />
+  <Project Path="GeBar.Hid/GeBar.Hid.csproj" />
+  <Project Path="GeBar.HidApp/GeBar.HidApp.csproj" />
+  <Project Path="GeBar.Tests/GeBar.Tests.csproj" />
+  <Project Path="GeBar.UI/GeBar.UI.csproj" />
+</Solution>

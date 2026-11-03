@@ -20,11 +20,10 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, loispg]
     timeout-minutes: 30
-    outputs:
-      version: ${{ steps.metadata.outputs.version }}
-      hid_version: ${{ steps.metadata.outputs.hid_version }}
-      build_time: ${{ steps.verify.outputs.build_time }}
-      build_duration: ${{ steps.verify.outputs.build_duration }}
+    permissions:
+      contents: write
+    env:
+      PUBLISH_RELEASE: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -115,25 +114,11 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  release:
-    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-    needs: build
-    runs-on: [self-hosted, loispg]
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - uses: actions/download-artifact@v8
-        with:
-          name: g-eBAR-win-x64
-          path: artifacts/release
       - name: Check release does not already exist
+        if: env.PUBLISH_RELEASE == 'true'
         uses: actions/github-script@v8
         env:
-          RELEASE_TAG: v${{ needs.build.outputs.version }}
+          RELEASE_TAG: v${{ steps.metadata.outputs.version }}
         with:
           script: |
             try {
@@ -147,10 +132,11 @@ jobs:
               if (error.status !== 404) throw error;
             }
       - name: Find previous release
+        if: env.PUBLISH_RELEASE == 'true'
         id: previous-release
         uses: actions/github-script@v8
         env:
-          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+          RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
         with:
           result-encoding: string
           script: |
@@ -173,14 +159,15 @@ jobs:
               .sort((left, right) => compare(right.version, left.version))
               .at(0)?.tag ?? '';
       - name: Build release changelog
+        if: env.PUBLISH_RELEASE == 'true'
         id: changelog
         shell: bash
         env:
           PREVIOUS_TAG: ${{ steps.previous-release.outputs.result }}
-          BUILD_VERSION: ${{ needs.build.outputs.version }}
-          HID_VERSION: ${{ needs.build.outputs.hid_version }}
-          BUILD_TIME: ${{ needs.build.outputs.build_time }}
-          BUILD_DURATION: ${{ needs.build.outputs.build_duration }}
+          BUILD_VERSION: ${{ steps.metadata.outputs.version }}
+          HID_VERSION: ${{ steps.metadata.outputs.hid_version }}
+          BUILD_TIME: ${{ steps.verify.outputs.build_time }}
+          BUILD_DURATION: ${{ steps.verify.outputs.build_duration }}
         run: |
           set -euo pipefail
           changelog_dir=$(mktemp -d)
@@ -225,10 +212,11 @@ jobs:
           fi
           cat release-body.md
       - name: Create version tag
+        if: env.PUBLISH_RELEASE == 'true'
         id: tag
         shell: bash
         env:
-          RELEASE_TAG: v${{ needs.build.outputs.version }}
+          RELEASE_TAG: v${{ steps.metadata.outputs.version }}
           RELEASE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
@@ -243,23 +231,25 @@ jobs:
           fi
           git push origin "refs/tags/$RELEASE_TAG"
       - name: Prepare versioned release
+        if: env.PUBLISH_RELEASE == 'true'
         id: release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ needs.build.outputs.version }}
+          tag_name: v${{ steps.metadata.outputs.version }}
           target_commitish: ${{ github.sha }}
-          name: g-eBAR v${{ needs.build.outputs.version }}
+          name: g-eBAR v${{ steps.metadata.outputs.version }}
           body_path: release-body.md
           files: |
-            artifacts/release/g-eBAR.exe
-            artifacts/release/g-eHID.exe
-            artifacts/release/SHA256SUMS.txt
-            artifacts/release/LICENSE
+            artifacts/g-eBAR-win-x64/g-eBAR.exe
+            artifacts/g-eBAR-win-x64/g-eHID.exe
+            artifacts/g-eBAR-win-x64/SHA256SUMS.txt
+            artifacts/g-eBAR-win-x64/LICENSE
           fail_on_unmatched_files: true
           generate_release_notes: false
           overwrite_files: false
           draft: true
       - name: Publish versioned release
+        if: env.PUBLISH_RELEASE == 'true'
         uses: actions/github-script@v8
         env:
           RELEASE_ID: ${{ steps.release.outputs.id }}
