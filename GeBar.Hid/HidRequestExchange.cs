@@ -18,9 +18,10 @@ public static class HidRequestExchange
         }
     }
 
-    public static async Task<byte[]?> SendThenReadFeatureAsync(HidStream stream, byte[] request, int reportLength, int retries, int delayMs, CancellationToken token)
+    public static async Task<byte[]?> SendThenReadFeatureAsync(HidStream stream, byte[] request, int reportLength, int retries, int delayMs, CancellationToken token, Func<byte[], bool>? accept = null)
     {
         if (reportLength <= 0) return null;
+        using IDisposable access = await HidDeviceAccess.EnterAsync(stream.Device.DevicePath, token).ConfigureAwait(false);
         for (int attempt = 0; attempt < Math.Max(1, retries); attempt++)
         {
             token.ThrowIfCancellationRequested();
@@ -34,7 +35,7 @@ public static class HidRequestExchange
             var response = new byte[reportLength];
             try { stream.GetFeature(response); }
             catch (Exception ex) when (ex is IOException or TimeoutException or UnauthorizedAccessException) { continue; }
-            return response;
+            if (accept is null || accept(response)) return response;
         }
         return null;
     }
@@ -42,6 +43,7 @@ public static class HidRequestExchange
     public static async Task<byte[]?> WriteThenReadInputAsync(Stream stream, byte[] request, int inputLength, string? matchPrefixHex, TimeSpan timeout, CancellationToken token, Action<byte[]>? unmatched = null, Func<byte[], bool>? accept = null)
     {
         if (inputLength <= 0) return null;
+        using IDisposable? access = stream is HidStream hid ? await HidDeviceAccess.EnterAsync(hid.Device.DevicePath, token).ConfigureAwait(false) : null;
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(timeout);
 

@@ -5,4 +5,5 @@
     <RootNamespace>GeBar.UI</RootNamespace>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+  <ItemGroup><ProjectReference Include="..\GeBar.Core\GeBar.Core.csproj" /></ItemGroup>
 </Project>

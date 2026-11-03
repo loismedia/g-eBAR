@@ -8,6 +8,7 @@ public static class HidBatteryReader
     public static async Task<HidBatteryReading?> TryReadAsync(HidDevice device, HidBatteryProtocolProfile profile, TimeSpan inputTimeout, CancellationToken token)
     {
         if (profile.Source != HidBatterySource.HidUsage || profile.Percentage is null) return null;
+        using IDisposable access = await HidDeviceAccess.EnterAsync(device.DevicePath, token).ConfigureAwait(false);
         HidStream? stream = null;
         try
         {

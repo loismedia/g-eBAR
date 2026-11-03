@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>g-eDPI</AssemblyName>
+    <RootNamespace>GeBar.Dpi</RootNamespace>
+    <Product>g-eDPI</Product>
+    <Title>g-eDPI</Title>
+    <Company>Lois Media</Company>
+    <Authors>lucz</Authors>
+    <InformationalVersion Condition="'$(DpiVersion)' != ''">$(DpiVersion)</InformationalVersion>
+    <InformationalVersion Condition="'$(DpiVersion)' == ''">$([System.DateTime]::Now.ToString('dd.MM'))-dpi-LOCAL</InformationalVersion>
+    <IsPublishable>true</IsPublishable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Using Include="System.IO" />
+    <ProjectReference Include="..\GeBar.UI\GeBar.UI.csproj" />
+    <ProjectReference Include="..\GeBar.Hid\GeBar.Hid.csproj" />
+    <AssemblyMetadata Include="ModuleApi" Value="1" />
+    <InternalsVisibleTo Include="GeBar.Tests" />
+  </ItemGroup>
+</Project>

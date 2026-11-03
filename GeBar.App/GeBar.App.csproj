@@ -9,6 +9,11 @@
   <ItemGroup><ProjectReference Include="..\GeBar.Core\GeBar.Core.csproj" /><ProjectReference Include="..\GeBar.UI\GeBar.UI.csproj" /><ProjectReference Include="..\GeBar.Hid\GeBar.Hid.csproj" /></ItemGroup>
   <ItemGroup><EmbeddedResource Include="Assets\g-e.ico" LogicalName="GeBar.App.g-e.ico" /><EmbeddedResource Include="Assets\built-in.json" LogicalName="GeBar.App.built-in.json" /></ItemGroup>
   <ItemGroup><InternalsVisibleTo Include="GeBar.Tests" /></ItemGroup>
+  <ItemGroup><ProjectReference Include="..\GeBar.Dpi\GeBar.Dpi.csproj" ReferenceOutputAssembly="false" /></ItemGroup>
+  <ItemGroup Condition="'$(PublishSingleFile)' != 'true'"><AssemblyMetadata Include="DevelopmentModules" Value="true" /></ItemGroup>
+  <Target Name="CopyDevelopmentModules" AfterTargets="Build" Condition="'$(PublishSingleFile)' != 'true'">
+    <Copy SourceFiles="..\GeBar.Dpi\bin\$(Configuration)\$(TargetFramework)\g-eDPI.dll" DestinationFolder="$(TargetDir)modules" SkipUnchangedFiles="true" Condition="Exists('..\GeBar.Dpi\bin\$(Configuration)\$(TargetFramework)\g-eDPI.dll')" />
+  </Target>
   <ItemGroup><AssemblyMetadata Include="Publisher" Value="Lois Media" /><AssemblyMetadata Include="Developer" Value="lucz" /></ItemGroup>
   <ItemGroup Condition="'$(RepositoryUrl)' != ''"><AssemblyMetadata Include="RepositoryUrl" Value="$(RepositoryUrl)" /></ItemGroup>
 </Project>

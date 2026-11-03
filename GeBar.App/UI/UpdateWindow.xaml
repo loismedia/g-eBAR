@@ -51,7 +51,10 @@
         <Border Grid.Row="3" Style="{StaticResource Card}" Padding="14">
             <FlowDocumentScrollViewer x:Name="ChangelogViewer" VerticalScrollBarVisibility="Auto" Background="Transparent" Foreground="{DynamicResource PrimaryText}" BorderThickness="0" IsToolBarVisible="False"/>
         </Border>
-        <CheckBox x:Name="HidCheckBox" Grid.Row="4" Margin="0,14,0,0" IsChecked="False" Checked="HidSelectionChanged" Unchecked="HidSelectionChanged"/>
+        <StackPanel Grid.Row="4" Margin="0,14,0,0">
+            <CheckBox x:Name="HidCheckBox" IsChecked="False" Checked="HidSelectionChanged" Unchecked="HidSelectionChanged"/>
+            <CheckBox x:Name="DpiCheckBox" Margin="0,8,0,0" IsChecked="False" Checked="HidSelectionChanged" Unchecked="HidSelectionChanged"/>
+        </StackPanel>
         <StackPanel x:Name="DownloadProgressPanel" Grid.Row="5" Margin="0,14,0,0" Visibility="Collapsed" Opacity="0">
             <Grid Margin="0,0,0,6"><TextBlock x:Name="DownloadStatusText"/><TextBlock x:Name="DownloadProductText" HorizontalAlignment="Right" Foreground="{DynamicResource SecondaryText}"/></Grid>
             <ProgressBar x:Name="DownloadProgressBar" Height="7" Minimum="0" Maximum="100" IsIndeterminate="True" Foreground="{DynamicResource AccentBrush}" Background="{DynamicResource DividerBrush}" BorderThickness="0"/>

@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace GeBar.App;
 
-internal sealed record DeviceEntry(string Id, string Name, string Revision, string Source, Func<IDeviceBatteryMonitor> Create);
+internal sealed record DeviceEntry(string Id, string Name, string Revision, string Source, Func<IDeviceBatteryMonitor> Create, HidDeviceProfile? Profile = null);
 
 internal static class DeviceCatalog
 {
@@ -22,7 +22,7 @@ internal static class DeviceCatalog
         return [.. order.Select(id => profiles[id]).Select(item => new DeviceEntry(item.Profile.Id, item.Profile.DisplayName,
             Revision(item.Profile, interval),
             Source(item.Profile, item.Origin),
-            () => new ProfileBatteryMonitor(item.Profile, logger, interval)))];
+            () => new ProfileBatteryMonitor(item.Profile, logger, interval), item.Profile))];
     }
 
     private static string Source(HidDeviceProfile profile, string origin)

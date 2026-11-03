@@ -9,5 +9,6 @@ internal static class AppPaths
     public static string Profiles { get; } = Path.Combine(Directory, "Profiles");
     public static string Modules { get; } = Path.Combine(Directory, "modules");
     public static string GeHidExecutable { get; } = Path.Combine(Modules, "g-eHID.exe");
+    public static string GeDpiLibrary { get; } = Path.Combine(Modules, "g-eDPI.dll");
     public static string Updates { get; } = Path.Combine(Path.GetTempPath(), "g-eBAR", "Updates");
 }

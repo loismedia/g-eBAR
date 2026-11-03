@@ -12,7 +12,8 @@ using System.Text.RegularExpressions;
 
 namespace GeBar.App;
 
-internal sealed record GitHubRelease(Version Version, string Tag, string Changelog, Uri? DownloadUrl, bool AppUpdateAvailable, string? HidVersion, Uri? HidDownloadUrl, bool HidUpdateAvailable, bool IsNightly, bool IsDowngrade, string? Sha256 = null, string? HidSha256 = null, ReleaseChannel? TargetChannel = null);
+internal sealed record GitHubRelease(Version Version, string Tag, string Changelog, Uri? DownloadUrl, bool AppUpdateAvailable, string? HidVersion, Uri? HidDownloadUrl, bool HidUpdateAvailable, bool IsNightly, bool IsDowngrade, string? Sha256 = null, string? HidSha256 = null, ReleaseChannel? TargetChannel = null,
+    string? DpiVersion = null, Uri? DpiDownloadUrl = null, bool DpiUpdateAvailable = false, string? DpiSha256 = null);
 internal readonly record struct UpdateDownloadProgress(long DownloadedBytes, long? TotalBytes);
 
 internal sealed partial class GitHubUpdateService : IDisposable
@@ -84,7 +85,7 @@ internal sealed partial class GitHubUpdateService : IDisposable
         string text = description.Trim();
         if (text.Length > MaximumDescription) text = text[..MaximumDescription] + "…";
         var builder = new StringBuilder()
-            .AppendLine($"**g-eBAR** {CurrentVersionLabel} ({BuildRevision}) / **g-eHID** {GetInstalledHidVersion() ?? "not installed"} / {WindowsRelease.Describe()} ({CultureInfo.CurrentUICulture.Name})")
+            .AppendLine($"**g-eBAR** {CurrentVersionLabel} ({BuildRevision}) / **g-eHID** {GetInstalledHidVersion() ?? "not installed"} / **g-eDPI** {GetInstalledDpiVersion() ?? "not installed"} / {WindowsRelease.Describe()} ({CultureInfo.CurrentUICulture.Name})")
             .AppendLine(settings)
             .AppendLine()
             .AppendLine("**Description:**")
@@ -215,8 +216,18 @@ internal sealed partial class GitHubUpdateService : IDisposable
                 && (switching || !string.Equals(GetInstalledHidVersion(), hidVersion, StringComparison.OrdinalIgnoreCase));
             if (switching && GetInstalledHidVersion() is not null && !hidUpdateAvailable)
                 throw new InvalidOperationException("The target channel has no compatible g-eHID module.");
-            if (!appUpdateAvailable && !hidUpdateAvailable) return null;
-            return new(version, tag, root.GetProperty("body").GetString() ?? string.Empty, downloadUri, appUpdateAvailable, hidVersion, hidDownloadUri, hidUpdateAvailable, isNightly, isDowngrade, AssetDigest(asset), AssetDigest(hidAsset), switching ? channel : null);
+            JsonElement? dpiRelease = releases.Cast<JsonElement?>().FirstOrDefault(item => item?.GetProperty("assets").EnumerateArray()
+                .Any(asset => string.Equals(asset.GetProperty("name").GetString(), "g-eDPI.dll", StringComparison.OrdinalIgnoreCase)) == true);
+            JsonElement? dpiAsset = dpiRelease?.GetProperty("assets").EnumerateArray()
+                .Where(item => string.Equals(item.GetProperty("name").GetString(), "g-eDPI.dll", StringComparison.OrdinalIgnoreCase)).Cast<JsonElement?>().FirstOrDefault();
+            Match dpiMatch = Regex.Match(dpiRelease?.GetProperty("body").GetString() ?? string.Empty, @"g-eDPI:\s*(?<version>\d{2}\.\d{2}-dpi-[A-Za-z0-9]{5})", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            string? dpiVersion = dpiMatch.Success ? dpiMatch.Groups["version"].Value : null;
+            Uri? dpiDownloadUri = AssetUri(dpiAsset);
+            bool dpiUpdateAvailable = dpiVersion is not null && dpiDownloadUri is not null
+                && (!switching && !string.Equals(GetInstalledDpiVersion(), dpiVersion, StringComparison.OrdinalIgnoreCase) || switching && channel == ReleaseChannel.Dev);
+            if (!appUpdateAvailable && !hidUpdateAvailable && !dpiUpdateAvailable) return null;
+            return new(version, tag, root.GetProperty("body").GetString() ?? string.Empty, downloadUri, appUpdateAvailable, hidVersion, hidDownloadUri, hidUpdateAvailable, isNightly, isDowngrade, AssetDigest(asset), AssetDigest(hidAsset), switching ? channel : null,
+                dpiVersion, dpiDownloadUri, dpiUpdateAvailable, AssetDigest(dpiAsset));
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException or JsonException or TaskCanceledException or KeyNotFoundException or InvalidOperationException)
         {
@@ -319,6 +330,50 @@ internal sealed partial class GitHubUpdateService : IDisposable
         if (!File.Exists(AppPaths.GeHidExecutable)) return null;
         try { return FileVersionInfo.GetVersionInfo(AppPaths.GeHidExecutable).ProductVersion?.Split('+')[0]; }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    public static string DpiModulePath
+    {
+        get
+        {
+            string local = Path.Combine(AppContext.BaseDirectory, "modules", "g-eDPI.dll");
+            bool development = Assembly.GetExecutingAssembly().GetCustomAttributes<AssemblyMetadataAttribute>()
+                .Any(attribute => attribute.Key == "DevelopmentModules" && attribute.Value == "true");
+            return development && File.Exists(local) || !File.Exists(AppPaths.GeDpiLibrary) ? local : AppPaths.GeDpiLibrary;
+        }
+    }
+
+    public static string? GetInstalledDpiVersion()
+    {
+        if (!File.Exists(DpiModulePath)) return null;
+        try { return FileVersionInfo.GetVersionInfo(DpiModulePath).ProductVersion?.Split('+')[0]; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    public async Task<string> DownloadDpiAsync(GitHubRelease release, IProgress<UpdateDownloadProgress>? progress, CancellationToken token)
+    {
+        if (release.DpiDownloadUrl is null || release.DpiVersion is null) throw new InvalidOperationException("The release has no g-eDPI module.");
+        System.IO.Directory.CreateDirectory(AppPaths.Updates);
+        string temporary = Path.Combine(AppPaths.Updates, $"g-eDPI-{release.DpiVersion}.dll.download");
+        try
+        {
+            await DownloadFileAsync(release.DpiDownloadUrl, temporary, release.DpiSha256, release.TargetChannel ?? _currentChannel, progress, token).ConfigureAwait(false);
+            AssemblyName identity = AssemblyName.GetAssemblyName(temporary);
+            if (identity.Name != "g-eDPI") throw new InvalidDataException("Unexpected g-eDPI package.");
+            return temporary;
+        }
+        catch { Discard(temporary); throw; }
+    }
+
+    public static void ApplyDpi(string package)
+    {
+        System.IO.Directory.CreateDirectory(AppPaths.Modules);
+        File.Move(package, AppPaths.GeDpiLibrary, true);
+    }
+
+    public static void RemoveDpi()
+    {
+        if (File.Exists(AppPaths.GeDpiLibrary)) File.Delete(AppPaths.GeDpiLibrary);
     }
 
     public static void LaunchHid()

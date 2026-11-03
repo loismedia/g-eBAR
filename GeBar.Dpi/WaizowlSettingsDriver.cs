@@ -1,0 +1,179 @@
+using System.Buffers.Binary;
+using GeBar.Core;
+using GeBar.Hid;
+using HidSharp;
+
+namespace GeBar.Dpi;
+
+public sealed class WaizowlSettingsDriver(IAppLogger logger) : IMouseSettingsDriver
+{
+    public MouseSettingsCapabilities Capabilities { get; private set; } = Limits(true, 30000);
+
+    public bool Supports(HidDeviceProfile device) => device.AllConnections().Any(connection => connection.VendorId == 0x1915 && SupportedProduct(connection.ProductId));
+
+    public Task<MouseSettings> ReadAsync(HidDeviceProfile device, CancellationToken token) => UseDevice(device, async (stream, product, cancellation) =>
+    {
+        Snapshot snapshot = await ReadSnapshot(stream, product, cancellation, logger).ConfigureAwait(false);
+        Capabilities = Limits(product == 0x0728, snapshot.Layout.MaximumDpi);
+        return snapshot.Settings;
+    }, token, true);
+
+    public Task<MouseSettings> SaveAsync(HidDeviceProfile device, MouseSettings expected, MouseSettings requested, CancellationToken token)
+    {
+        if (!Capabilities.Accepts(requested)) throw new ArgumentOutOfRangeException(nameof(requested));
+        return UseDevice(device, (stream, product, cancellation) => Save(stream, product, expected, requested, cancellation), token);
+    }
+
+    internal async Task<MouseSettings> Save(Stream stream, int product, MouseSettings expected, MouseSettings requested, CancellationToken token)
+    {
+        Snapshot current = await ReadSnapshot(stream, product, token, logger).ConfigureAwait(false);
+        if (!Limits(product == 0x0728, current.Layout.MaximumDpi).Accepts(requested)) throw new ArgumentOutOfRangeException(nameof(requested));
+        if (current.Settings != expected) throw new InvalidOperationException(Text.ChangedExternally);
+        if (requested == expected) return expected;
+        byte[] write = WriteRequest(current, requested);
+        await Exchange(stream, write, token, logger).ConfigureAwait(false);
+        byte[] flash = Request(product == 0x0728 ? (byte)0x4A : (byte)0x0A, 1);
+        using (IDisposable? access = stream is HidStream hid ? await HidDeviceAccess.EnterAsync(hid.Device.DevicePath, token).ConfigureAwait(false) : null)
+        {
+            await stream.WriteAsync(flash, token).ConfigureAwait(false);
+            await Task.Delay(60, token).ConfigureAwait(false);
+        }
+        Snapshot actual = await ReadSnapshot(stream, product, token, logger).ConfigureAwait(false);
+        if (actual.Settings != requested || actual.Layout != current.Layout) throw new IOException(Text.VerificationFailed);
+        logger.Info($"g-eDPI: Waizowl settings verified, model={actual.Layout.Name}, DPI={actual.Settings.Dpi}, polling={actual.Settings.PollingRate} Hz, LOD={actual.Settings.Lod} mm");
+        return actual.Settings;
+    }
+
+    internal sealed record ModelLayout(string Name, int LodOffset, int MaximumDpi);
+    internal sealed record Snapshot(ModelLayout Layout, byte[] Packet, MouseSettings Settings);
+
+    internal static async Task<Snapshot> ReadSnapshot(Stream stream, int product, CancellationToken token, IAppLogger? trace = null)
+    {
+        bool wireless = product == 0x0728;
+        ModelLayout layout;
+        if (wireless)
+        {
+            byte[] receiver = await Exchange(stream, Request(0x01, 1), token, trace).ConfigureAwait(false);
+            if ((receiver[5] & 8) == 0) throw new IOException(Text.Unavailable);
+            layout = Identify(receiver.AsSpan(12, 4));
+        }
+        else layout = ProductLayout(product);
+        byte[] status = await Exchange(stream, Request(wireless ? (byte)0x41 : (byte)0x01, 1), token, trace).ConfigureAwait(false);
+        byte[] sensor = await Exchange(stream, Request(wireless ? (byte)0x44 : (byte)0x04, 1), token, trace).ConfigureAwait(false);
+        int active = sensor[8];
+        if (active > 4 || (sensor[7] & (1 << active)) == 0 || status[9] != active) throw new InvalidDataException(Text.InvalidResponse);
+        int dpi = BinaryPrimitives.ReadUInt16LittleEndian(sensor.AsSpan(9 + active * 4, 2));
+        int rate = DecodePolling(status[10]);
+        double lod = sensor[layout.LodOffset];
+        var settings = new MouseSettings(dpi, rate, lod);
+        if (!Limits(wireless, layout.MaximumDpi).Accepts(settings)) throw new InvalidDataException(Text.InvalidResponse);
+        return new(layout, sensor, settings);
+    }
+
+    internal static byte[] WriteRequest(Snapshot current, MouseSettings requested)
+    {
+        byte[] packet = [.. current.Packet];
+        bool wireless = packet[1] == 0x44;
+        if (packet.Length != 65 || packet[1] is not (0x44 or 0x04) || packet[4] != 1
+            || !Limits(wireless, current.Layout.MaximumDpi).Accepts(requested)) throw new InvalidDataException(Text.InvalidResponse);
+        packet[4] = 2;
+        if (requested.Dpi != current.Settings.Dpi)
+        {
+            int offset = 9 + packet[8] * 4;
+            BinaryPrimitives.WriteUInt16LittleEndian(packet.AsSpan(offset, 2), (ushort)requested.Dpi);
+            BinaryPrimitives.WriteUInt16LittleEndian(packet.AsSpan(offset + 2, 2), (ushort)requested.Dpi);
+        }
+        if (requested.PollingRate != current.Settings.PollingRate)
+        {
+            packet[6] = EncodePolling(requested.PollingRate);
+            if (requested.PollingRate >= 2000) packet[5] |= 0x40;
+        }
+        if (requested.Lod != current.Settings.Lod) packet[current.Layout.LodOffset] = (byte)requested.Lod;
+        Checksum(packet);
+        return packet;
+    }
+
+    internal static ModelLayout Identify(ReadOnlySpan<byte> id) => Convert.ToHexString(id) switch
+    {
+        "F2070000" => new("OGM Cloud", 37, 26000),
+        "F4070000" => new("Cloud 3950", 29, 30000),
+        "F6070000" => new("Cloud XS", 29, 30000),
+        "F3070000" or "F5070000" => new("OGM PRO V2", 29, 30000),
+        "B0070000" => new("OGM PRO", 44, 26000),
+        _ => throw new NotSupportedException($"{Text.Unsupported} ({Convert.ToHexString(id)})")
+    };
+
+    private static ModelLayout ProductLayout(int product) => product switch
+    {
+        0x072C => new("OGM Cloud", 37, 26000),
+        0x07A1 => new("Cloud 3950", 29, 30000),
+        0x07A3 => new("Cloud XS", 29, 30000),
+        0x07A0 or 0x07A2 => new("OGM PRO V2", 29, 30000),
+        0x0726 => new("OGM PRO", 44, 26000),
+        _ => throw new NotSupportedException(Text.Unsupported)
+    };
+
+    private static bool SupportedProduct(int product) => product is 0x0728 or 0x072C or 0x07A1 or 0x07A3 or 0x07A0 or 0x07A2 or 0x0726;
+    private static MouseSettingsCapabilities Limits(bool wireless, int maximum) => new(100, maximum, 50, wireless ? [125, 500, 1000, 2000, 4000, 8000] : [125, 500, 1000], [1, 2]);
+    internal static byte EncodePolling(int rate) => rate switch { 125 => 0, 500 => 2, 1000 => 3, 2000 => 4, 4000 => 5, 8000 => 6, _ => throw new ArgumentOutOfRangeException(nameof(rate)) };
+    internal static int DecodePolling(byte rate) => rate switch { 0 => 125, 2 => 500, 3 => 1000, 4 => 2000, 5 => 4000, 6 => 8000, _ => throw new InvalidDataException(Text.InvalidResponse) };
+
+    internal static byte[] Request(byte command, byte operation)
+    {
+        var packet = new byte[65];
+        packet[1] = command;
+        packet[3] = 0x81;
+        packet[4] = operation;
+        Checksum(packet);
+        return packet;
+    }
+
+    internal static void Checksum(byte[] packet)
+    {
+        int sum = 0;
+        for (int index = 1; index < 64; index++) sum += packet[index];
+        packet[64] = unchecked((byte)(0xA1 - sum));
+    }
+
+    private static async Task<byte[]> Exchange(Stream stream, byte[] request, CancellationToken token, IAppLogger? trace = null)
+    {
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            if (trace?.IsRawPacketLoggingEnabled == true) trace.Info($"g-eDPI Waizowl TX [{request.Length}] {Convert.ToHexString(request)}");
+            byte[]? response = await HidRequestExchange.WriteThenReadInputAsync(stream, request, 65, null, TimeSpan.FromMilliseconds(1200), token,
+                accept: packet => packet.Length == 65 && packet[0] == 0 && packet[1] == request[1] && packet[3] == 0x8C && packet[4] == request[4]).ConfigureAwait(false);
+            if (response is not null)
+            {
+                if (trace?.IsRawPacketLoggingEnabled == true) trace.Info($"g-eDPI Waizowl RX [{response.Length}] {Convert.ToHexString(response)}");
+                return response;
+            }
+            token.ThrowIfCancellationRequested();
+        }
+        throw new IOException(Text.Unavailable);
+    }
+
+    private async Task<MouseSettings> UseDevice(HidDeviceProfile device, Func<HidStream, int, CancellationToken, Task<MouseSettings>> action, CancellationToken token, bool readOnly = false)
+    {
+        if (!Supports(device)) throw new NotSupportedException(Text.Unsupported);
+        foreach (HidDeviceConnectionProfile connection in device.AllConnections()
+            .Where(connection => connection.VendorId == 0x1915 && SupportedProduct(connection.ProductId)).OrderBy(connection => connection.ProductId == 0x0728 ? 1 : 0))
+        {
+            foreach (HidDevice handle in DeviceList.Local.GetHidDevices(connection.VendorId, connection.ProductId))
+            {
+                if (HidDeviceScanner.TopUsagePage(handle) != 0xFF0A || HidDeviceScanner.InputLengthOf(handle) != 65 || OutputLength(handle) != 65) continue;
+                using HidStream? stream = HidRequestExchange.TryOpenShared(handle);
+                if (stream is null) continue;
+                logger.Info($"g-eDPI: opening Waizowl {connection.VendorId:X4}:{connection.ProductId:X4}, path={HidDeviceScanner.PathOf(handle)}");
+                try { return await action(stream, connection.ProductId, token).ConfigureAwait(false); }
+                catch (IOException error) when (readOnly) { logger.Warning($"g-eDPI: Waizowl settings read failed: {error.Message}"); }
+            }
+        }
+        throw new IOException(Text.Unavailable);
+    }
+
+    private static int OutputLength(HidDevice device)
+    {
+        try { return device.GetMaxOutputReportLength(); }
+        catch (Exception error) when (error is IOException or NotSupportedException) { return 0; }
+    }
+}

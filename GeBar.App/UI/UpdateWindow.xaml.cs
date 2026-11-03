@@ -40,8 +40,13 @@ internal partial class UpdateWindow : Window
         HidCheckBox.Content = release.HidVersion is null ? Strings.HidReleaseUnavailable : Strings.HidReleaseVersion(release.HidVersion);
         HidCheckBox.IsEnabled = release.HidUpdateAvailable && release.TargetChannel is null;
         HidCheckBox.IsChecked = release.HidUpdateAvailable && GitHubUpdateService.GetInstalledHidVersion() is not null;
-        DownloadButton.IsEnabled = release.AppUpdateAvailable || HidCheckBox.IsChecked == true;
-        DownloadProductText.Text = release.AppUpdateAvailable ? Strings.AppName : Strings.HidName;
+        DpiCheckBox.Content = release.DpiVersion is null ? Strings.DpiReleaseUnavailable : $"g-eDPI {release.DpiVersion}";
+        DpiCheckBox.Visibility = release.DpiVersion is not null || GitHubUpdateService.GetInstalledDpiVersion() is not null ? Visibility.Visible : Visibility.Collapsed;
+        DpiCheckBox.IsEnabled = release.DpiUpdateAvailable && release.TargetChannel is null;
+        DpiCheckBox.IsChecked = release.DpiUpdateAvailable && GitHubUpdateService.GetInstalledDpiVersion() is not null;
+        DownloadButton.IsEnabled = release.AppUpdateAvailable || HidCheckBox.IsChecked == true || DpiCheckBox.IsChecked == true;
+        if (!release.AppUpdateAvailable && !release.HidUpdateAvailable) AvailableText.Text = $"g-eDPI {release.DpiVersion}";
+        DownloadProductText.Text = release.AppUpdateAvailable ? Strings.AppName : release.HidUpdateAvailable ? Strings.HidName : "g-eDPI";
         NightlyWarningText.Text = stableRollback ? Strings.StableRollbackWarning : Strings.NightlyWarning;
         NightlyWarning.Visibility = release.AppUpdateAvailable && (release.IsNightly || stableRollback) ? Visibility.Visible : Visibility.Collapsed;
         Loaded += (_, _) => Windows11WindowStyler.Apply(this);
@@ -177,6 +182,7 @@ internal partial class UpdateWindow : Window
         DownloadButton.IsEnabled = false;
         HistoryButton.IsEnabled = false;
         HidCheckBox.IsEnabled = false;
+        DpiCheckBox.IsEnabled = false;
         DownloadStatusText.Text = Strings.DownloadStarting;
         DownloadProgressBar.IsIndeterminate = true;
         DownloadProgressBar.Value = 0;
@@ -199,6 +205,12 @@ internal partial class UpdateWindow : Window
                 DownloadProductText.Text = Strings.HidName;
                 hidPackage = await _service.DownloadHidAsync(_release, progress, _lifetime.Token);
             }
+            string? dpiPackage = null;
+            if (DpiCheckBox.IsChecked == true)
+            {
+                DownloadProductText.Text = "g-eDPI";
+                dpiPackage = await _service.DownloadDpiAsync(_release, progress, _lifetime.Token);
+            }
             string? appPackage = null;
             if (_release.AppUpdateAvailable)
             {
@@ -207,6 +219,7 @@ internal partial class UpdateWindow : Window
             }
 
             if (hidPackage is not null) GitHubUpdateService.ApplyHid(hidPackage);
+            if (dpiPackage is not null) GitHubUpdateService.ApplyDpi(dpiPackage);
             if (appPackage is not null)
             {
                 AppDialog.Show(this, Strings.Downloaded, Strings.AppName);
@@ -215,7 +228,7 @@ internal partial class UpdateWindow : Window
                 Close();
                 return;
             }
-            AppDialog.Show(this, Strings.HidInstalled, Strings.AppName);
+            AppDialog.Show(this, Strings.ModulesInstalled, Strings.AppName);
             Close();
         }
         catch (OperationCanceledException)
@@ -234,9 +247,10 @@ internal partial class UpdateWindow : Window
     private void Restore()
     {
         _installing = false;
-        DownloadButton.IsEnabled = _release.AppUpdateAvailable || HidCheckBox.IsChecked == true;
+        DownloadButton.IsEnabled = _release.AppUpdateAvailable || HidCheckBox.IsChecked == true || DpiCheckBox.IsChecked == true;
         HistoryButton.IsEnabled = true;
         HidCheckBox.IsEnabled = _release.HidUpdateAvailable;
+        DpiCheckBox.IsEnabled = _release.DpiUpdateAvailable && _release.TargetChannel is null;
         StopIndeterminateProgressAnimation();
         DownloadProgressPanel.Visibility = Visibility.Collapsed;
     }
@@ -244,7 +258,7 @@ internal partial class UpdateWindow : Window
     private void HidSelectionChanged(object sender, RoutedEventArgs e)
     {
         if (!IsInitialized || _installing) return;
-        DownloadButton.IsEnabled = _release.AppUpdateAvailable || HidCheckBox.IsChecked == true;
+        DownloadButton.IsEnabled = _release.AppUpdateAvailable || HidCheckBox.IsChecked == true || DpiCheckBox.IsChecked == true;
     }
 
     private void StartIndeterminateProgressAnimation()

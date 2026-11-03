@@ -648,7 +648,8 @@ internal sealed class BatteryTrayApplicationContext
     private ControlCenterWindow EnsureWindow()
     {
         if (_window is not null) return _window;
-        _window = new ControlCenterWindow(_settings, _diagnosticsMode, _updates.Token, _logger);
+        _window = new ControlCenterWindow(_settings, _diagnosticsMode, _updates.Token, _logger,
+            id => _devices.FirstOrDefault(entry => entry.Id == id)?.Profile);
         _window.Closed += (_, _) => _window = null;
         _window.OpenLogsRequested += (_, _) => OpenLogs();
         _window.CheckUpdatesRequested += async (_, _) => await CheckUpdatesAsync(true);

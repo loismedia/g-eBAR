@@ -10,6 +10,9 @@ internal static class Strings
     public static string AppName => "g-eBAR";
     public static string HidName => "g-eHID";
     public static string Modules => Ru ? "Модули" : "Modules";
+    public static string DpiReleaseUnavailable => Ru ? "g-eDPI недоступен в этом релизе" : "g-eDPI is unavailable in this release";
+    public static string ModulesInstalled => Ru ? "Модули установлены." : "Modules have been installed.";
+    public static string RemoveDpi => Ru ? "Удалить g-eDPI" : "Remove g-eDPI";
     public static string RemoveHid => Ru ? "Удалить g-eHID" : "Remove g-eHID";
     public static string HidVersion(string value) => $"g-eHID {value}";
     public static string HidReleaseUnavailable => Ru ? "g-eHID недоступен в этом релизе" : "g-eHID is unavailable in this release";

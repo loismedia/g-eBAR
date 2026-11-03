@@ -1,0 +1,187 @@
+using System.Globalization;
+using System.Reflection;
+using System.Runtime.ExceptionServices;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Threading;
+using GeBar.App;
+using GeBar.Core;
+using GeBar.Dpi;
+using GeBar.UI;
+
+namespace GeBar.Tests;
+
+public class DeviceSettingsSummaryTests
+{
+    private static readonly HidDeviceProfile Device = new("mouse-a", "Mouse A", 0xFFFF, 0xFFFF, null, null, [], new());
+
+    [Theory]
+    [InlineData("ru-RU")]
+    [InlineData("en-US")]
+    public void SummaryKeepsRequestedUnitsAndDecimalPoint(string culture)
+    {
+        CultureInfo previous = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo(culture);
+            var summary = new DeviceSettingsSummary("mouse", 400, 1000, 1);
+
+            Assert.Equal("Mouse (400dpi, 1000hz, 1.0mm)", ControlCenterWindow.FormatDeviceName("Mouse", summary.Display));
+            Assert.Equal("Mouse", ControlCenterWindow.FormatDeviceName("Mouse", null));
+        }
+        finally { CultureInfo.CurrentCulture = previous; }
+    }
+
+    [Fact]
+    public void EditedValuesAreNotPublishedBeforeSave() => Sta(async () =>
+    {
+        var driver = new Driver();
+        using var module = new DpiModule(new Logger(), [driver]);
+        await module.SetDeviceAsync(Device, CancellationToken.None);
+        TextBox input = Assert.Single(Descendants(module.View).OfType<TextBox>());
+
+        input.Text = "1200";
+
+        Assert.True(module.CanSave);
+        Assert.Equal(800, module.CurrentSettings?.Dpi);
+        Assert.Equal(0, driver.Saves);
+        Assert.True(await module.SaveAsync(CancellationToken.None));
+        Assert.Equal(1, driver.Saves);
+        Assert.Equal(1200, module.CurrentSettings?.Dpi);
+        Assert.False(module.CanSave);
+    });
+
+    [Fact]
+    public void BackgroundReadRefreshesActualSummaryWithoutOverwritingEdits() => Sta(async () =>
+    {
+        var driver = new Driver();
+        using var module = new DpiModule(new Logger(), [driver]);
+        await module.SetDeviceAsync(Device, CancellationToken.None);
+        TextBox input = Assert.Single(Descendants(module.View).OfType<TextBox>());
+        input.Text = "1200";
+        driver.Settings = new(400, 1000, 2);
+
+        await module.RefreshSettingsAsync(CancellationToken.None);
+
+        Assert.Equal("1200", input.Text);
+        Assert.Equal(new DeviceSettingsSummary(Device.Id, 400, 1000, 2), module.CurrentSettings);
+        Assert.Equal(0, driver.Saves);
+    });
+
+    [Fact]
+    public void UnsupportedSelectionClearsPreviousSummary() => Sta(async () =>
+    {
+        using var module = new DpiModule(new Logger(), [new Driver()]);
+        await module.SetDeviceAsync(Device, CancellationToken.None);
+        Assert.NotNull(module.CurrentSettings);
+
+        await module.SetDeviceAsync(Device with { Id = "unsupported" }, CancellationToken.None);
+
+        Assert.Null(module.CurrentSettings);
+        Assert.False(module.CanSave);
+    });
+
+    [Fact]
+    public void SelectedDeviceDoesNotInheritAnotherMousesParameters() => Sta(() =>
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"gebar-summary-{Guid.NewGuid():N}");
+        ControlCenterWindow? window = null;
+        try
+        {
+            window = new ControlCenterWindow(new(), false, string.Empty, new FileLogger(directory, "test"));
+            var loader = (SettingsModuleLoader)typeof(ControlCenterWindow).GetField("_moduleLoader", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+            loader.Dispose();
+            typeof(SettingsModuleLoader).GetProperty(nameof(SettingsModuleLoader.Module))!.SetValue(loader, new SummaryModule());
+            window.SetDevices([("mouse-a", "Mouse A"), ("mouse-b", "Mouse B")], "mouse-a");
+            var combo = (ComboBox)window.FindName("DeviceCombo");
+
+            Assert.Equal(new[] { "Mouse A (400dpi, 1000hz, 1.0mm)", "Mouse B" }, (string[])combo.ItemsSource);
+            Assert.Equal("mouse-a", window.Value.SelectedDeviceId);
+
+            window.SetDevices([("mouse-a", "Mouse A"), ("mouse-b", "Mouse B")], "mouse-b");
+
+            Assert.Equal(new[] { "Mouse A", "Mouse B" }, (string[])combo.ItemsSource);
+            Assert.Equal(1, combo.SelectedIndex);
+            Assert.Equal("Mouse B", ((TextBlock)window.FindName("DeviceNameText")).Text);
+            return Task.CompletedTask;
+        }
+        finally
+        {
+            window?.Close();
+            if (Directory.Exists(directory)) Directory.Delete(directory, true);
+        }
+    });
+
+    private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
+    {
+        foreach (object value in LogicalTreeHelper.GetChildren(root))
+        {
+            if (value is not DependencyObject child) continue;
+            yield return child;
+            foreach (DependencyObject descendant in Descendants(child)) yield return descendant;
+        }
+    }
+
+    private static void Sta(Func<Task> action)
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            Dispatcher dispatcher = Dispatcher.CurrentDispatcher;
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(dispatcher));
+            try
+            {
+                Task work = action();
+                var frame = new DispatcherFrame();
+                _ = work.ContinueWith(_ => dispatcher.BeginInvoke(() => frame.Continue = false));
+                Dispatcher.PushFrame(frame);
+                work.GetAwaiter().GetResult();
+            }
+            catch (Exception error) { failure = error; }
+            finally { dispatcher.InvokeShutdown(); }
+        }) { IsBackground = true };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(15)), "Settings summary test timed out");
+        if (failure is not null) ExceptionDispatchInfo.Capture(failure).Throw();
+    }
+
+    private sealed class Driver : IMouseSettingsDriver
+    {
+        public MouseSettings Settings { get; set; } = new(800, 1000, 1);
+        public int Saves { get; private set; }
+        public MouseSettingsCapabilities Capabilities { get; } = new(50, 30000, 50, [1000], [1, 2]);
+        public bool Supports(HidDeviceProfile device) => device.Id == Device.Id;
+        public Task<MouseSettings> ReadAsync(HidDeviceProfile device, CancellationToken token) => Task.FromResult(Settings);
+        public Task<MouseSettings> SaveAsync(HidDeviceProfile device, MouseSettings expected, MouseSettings requested, CancellationToken token)
+        {
+            Saves++;
+            Settings = requested;
+            return Task.FromResult(Settings);
+        }
+    }
+
+    private sealed class SummaryModule : ISettingsModule, IDeviceSettingsSource
+    {
+        public string Name => "g-eDPI";
+        public string Version => "03.11-dpi-LOCAL";
+        public FrameworkElement View { get; } = new Border();
+        public bool CanSave => false;
+        public DeviceSettingsSummary? CurrentSettings => new("mouse-a", 400, 1000, 1);
+        public event EventHandler? SaveAvailabilityChanged { add { } remove { } }
+        public event EventHandler? SettingsChanged { add { } remove { } }
+        public Task SetDeviceAsync(HidDeviceProfile? device, CancellationToken token) => Task.CompletedTask;
+        public Task<bool> SaveAsync(CancellationToken token) => Task.FromResult(false);
+        public Task RefreshSettingsAsync(CancellationToken token) => Task.CompletedTask;
+        public void Dispose() { }
+    }
+
+    private sealed class Logger : IAppLogger
+    {
+        public string LogDirectory => Path.GetTempPath();
+        public bool IsRawPacketLoggingEnabled => false;
+        public void Info(string message) { }
+        public void Warning(string message) { }
+        public void Error(string message, Exception? exception = null) { }
+    }
+}
