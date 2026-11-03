@@ -24,6 +24,7 @@ jobs:
       version: ${{ steps.metadata.outputs.version }}
       hid_version: ${{ steps.metadata.outputs.hid_version }}
       build_time: ${{ steps.verify.outputs.build_time }}
+      build_duration: ${{ steps.verify.outputs.build_duration }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -45,6 +46,7 @@ jobs:
           suffix="${GITHUB_SHA:0:5}"
           hid_version="$(TZ='Europe/Moscow' date '+%d.%m')-hid-${suffix^^}"
           printf 'version=%s\nhid_version=%s\n' "$version" "$hid_version" >> "$GITHUB_OUTPUT"
+          printf 'BUILD_STARTED_AT=%s\n' "$(date +%s)" >> "$GITHUB_ENV"
       - name: Lint Dockerfile
         shell: bash
         run: |
@@ -81,15 +83,18 @@ jobs:
           set -euo pipefail
           test -s artifacts/g-eBAR-win-x64/g-eBAR.exe
           test -s artifacts/g-eBAR-win-x64/g-eHID.exe
+          test -s artifacts/g-eBAR-win-x64/LICENSE
           cd artifacts/g-eBAR-win-x64
-          sha256sum g-eBAR.exe g-eHID.exe > SHA256SUMS.txt
+          sha256sum g-eBAR.exe g-eHID.exe LICENSE > SHA256SUMS.txt
           printf 'build_time=%s\n' "$(TZ='Europe/Moscow' date '+%Y-%m-%d %H:%M:%S UTC+3')" >> "$GITHUB_OUTPUT"
+          printf 'build_duration=%ss\n' "$(( $(date +%s) - BUILD_STARTED_AT ))" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v7
         with:
           name: g-eBAR-win-x64
           path: |
             artifacts/g-eBAR-win-x64/*.exe
             artifacts/g-eBAR-win-x64/SHA256SUMS.txt
+            artifacts/g-eBAR-win-x64/LICENSE
           if-no-files-found: error
           retention-days: 30
 
@@ -102,6 +107,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v8
         with:
           name: g-eBAR-win-x64
@@ -122,22 +129,98 @@ jobs:
             } catch (error) {
               if (error.status !== 404) throw error;
             }
+      - name: Find previous release
+        id: previous-release
+        uses: actions/github-script@v8
+        env:
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+        with:
+          result-encoding: string
+          script: |
+            const current = process.env.RELEASE_VERSION.split('.').map(Number);
+            const compare = (left, right) => {
+              for (let index = 0; index < 3; index++) {
+                if (left[index] !== right[index]) return left[index] - right[index];
+              }
+              return 0;
+            };
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100
+            });
+            return releases
+              .filter(release => (release.name ?? '').startsWith('g-eBAR') && !release.draft && !release.prerelease && /^v\d+\.\d+\.\d+$/.test(release.tag_name))
+              .map(release => ({ tag: release.tag_name, version: release.tag_name.substring(1).split('.').map(Number) }))
+              .filter(release => compare(release.version, current) < 0)
+              .sort((left, right) => compare(right.version, left.version))
+              .at(0)?.tag ?? '';
+      - name: Build release changelog
+        id: changelog
+        shell: bash
+        env:
+          PREVIOUS_TAG: ${{ steps.previous-release.outputs.result }}
+          BUILD_VERSION: ${{ needs.build.outputs.version }}
+          HID_VERSION: ${{ needs.build.outputs.hid_version }}
+          BUILD_TIME: ${{ needs.build.outputs.build_time }}
+          BUILD_DURATION: ${{ needs.build.outputs.build_duration }}
+        run: |
+          set -euo pipefail
+          changelog_dir=$(mktemp -d)
+          touch "$changelog_dir/feat" "$changelog_dir/fix" "$changelog_dir/style" "$changelog_dir/modules"
+          if [[ -n "$PREVIOUS_TAG" ]]; then
+            log_range="$PREVIOUS_TAG..$GITHUB_SHA"
+          else
+            log_range="$GITHUB_SHA"
+          fi
+
+          while IFS= read -r subject; do
+            case "$subject" in
+              feat:*) printf -- '- %s\n' "${subject#feat:}" >> "$changelog_dir/feat" ;;
+              fix:*) printf -- '- %s\n' "${subject#fix:}" >> "$changelog_dir/fix" ;;
+              style:*) printf -- '- %s\n' "${subject#style:}" >> "$changelog_dir/style" ;;
+              modules:*) printf -- '- %s\n' "${subject#modules:}" >> "$changelog_dir/modules" ;;
+            esac
+          done < <(git log --format='%s' "$log_range")
+
+          append_section() {
+            local title="$1"
+            local file="$2"
+            if [[ -s "$file" ]]; then
+              printf '#### %s\n\n' "$title" >> release-body.md
+              cat "$file" >> release-body.md
+              printf '\n' >> release-body.md
+            fi
+          }
+
+          {
+            printf 'g-eBAR v%s\n\n' "$BUILD_VERSION"
+            printf 'g-eHID: %s\n\n' "$HID_VERSION"
+            printf 'Built: %s / duration: %s / commit: %s\n\n' "$BUILD_TIME" "$BUILD_DURATION" "${GITHUB_SHA:0:7}"
+            printf '### Changelog\n\n'
+          } > release-body.md
+          append_section 'New features' "$changelog_dir/feat"
+          append_section 'Fixes' "$changelog_dir/fix"
+          append_section 'Style' "$changelog_dir/style"
+          append_section 'Modules' "$changelog_dir/modules"
+          if [[ ! -s "$changelog_dir/feat" && ! -s "$changelog_dir/fix" && ! -s "$changelog_dir/style" && ! -s "$changelog_dir/modules" ]]; then
+            printf -- '- No user-facing changes.\n\n' >> release-body.md
+          fi
+          cat release-body.md
       - name: Prepare versioned release
         id: release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: g-eBAR v${{ needs.build.outputs.version }}
-          body: |
-            g-eHID: ${{ needs.build.outputs.hid_version }}
-
-            Built: ${{ needs.build.outputs.build_time }}
+          body_path: release-body.md
           files: |
             artifacts/release/g-eBAR.exe
             artifacts/release/g-eHID.exe
             artifacts/release/SHA256SUMS.txt
+            artifacts/release/LICENSE
           fail_on_unmatched_files: true
-          generate_release_notes: true
+          generate_release_notes: false
           overwrite_files: false
           draft: true
       - name: Publish versioned release
