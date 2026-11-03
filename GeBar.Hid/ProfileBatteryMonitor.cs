@@ -39,6 +39,7 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
     private int? _offPercentage;
     private int? _lastKnown;
     private readonly Dictionary<(int Vendor, int Product), (int Quiet, DateTimeOffset Resume)> _probes = [];
+    private readonly Dictionary<(int Vendor, int Product), HidBatteryProtocolProfile> _protocols = [];
     private CancellationTokenSource? _lifetime;
     private Task? _worker;
     private HidBatteryProtocolProfile? _resolved;
@@ -132,7 +133,6 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
             if (handles.Length == 0) continue;
             anyHandles = true;
             if (answered == (connection.VendorId, connection.ProductId)) continue;
-            if (_activeConnection is not null && !Same(_activeConnection, connection)) _resolved = null;
             HidBatteryReading? candidate = await ReadAsync(connection, handles, token).ConfigureAwait(false);
             if (logger.IsRawPacketLoggingEnabled)
                 logger.Info($"Profile {profile.Name}: connection {connection.VendorId:X4}:{connection.ProductId:X4} handles={handles.Length} answer={(candidate is null ? "none" : $"{candidate.Percentage}% charging={candidate.IsCharging?.ToString() ?? "unknown"} ({candidate.Detail})")}");
@@ -236,15 +236,21 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
 
     private async Task<HidBatteryReading?> ReadAsync(HidDeviceConnectionProfile connection, HidDevice[] handles, CancellationToken token)
     {
-        HidBatteryProtocolProfile battery = _resolved ?? connection.Battery;
+        (int Vendor, int Product) key = (connection.VendorId, connection.ProductId);
+        HidBatteryProtocolProfile battery = _protocols.GetValueOrDefault(key) ?? connection.Battery;
         HidDevice? handle = battery.DevicePath is null ? null : handles.FirstOrDefault(item => HidDeviceScanner.PathOf(item).Equals(battery.DevicePath, StringComparison.OrdinalIgnoreCase));
         if (handle is not null && battery.RequestKind != HidRequestKind.None)
         {
             HidReplay replay = await HidBatteryReader.ReplayAsync(handle, battery, token, logger.IsRawPacketLoggingEnabled ? logger : null).ConfigureAwait(false);
-            if (replay.Reading is not null) return await WithCharging(replay.Reading, handles, token).ConfigureAwait(false);
+            if (replay.Reading is not null)
+            {
+                RememberProtocol(connection, battery);
+                return await WithCharging(replay.Reading, handles, token).ConfigureAwait(false);
+            }
             if (replay.Answered)
             {
                 _refused = true;
+                RememberProtocol(connection, battery);
                 _lastKnown = replay.LastKnown ?? _lastKnown;
                 if (logger.IsRawPacketLoggingEnabled)
                     logger.Info($"Profile {profile.Name}: {connection.VendorId:X4}:{connection.ProductId:X4} returned a confirmed sleep response");
@@ -254,11 +260,13 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
         if (handle is not null && battery.Percentage is not null)
         {
             HidBatteryReading? direct = await HidBatteryReader.TryReadAsync(handle, battery, TimeSpan.FromSeconds(3), token).ConfigureAwait(false);
-            if (direct is not null) return direct;
+            if (direct is not null)
+            {
+                RememberProtocol(connection, battery);
+                return direct;
+            }
         }
-        (int Vendor, int Product) key = (connection.VendorId, connection.ProductId);
         if (_probes.TryGetValue(key, out var backoff) && DateTimeOffset.Now < backoff.Resume) return null;
-        _resolved = null;
         if (logger.IsRawPacketLoggingEnabled)
             logger.Info($"Profile {profile.Name}: {connection.VendorId:X4}:{connection.ProductId:X4} did not answer the stored protocol, probing again");
         HidDeviceProfile live = HidDeviceScanner.ScanDevice(connection.VendorId, connection.ProductId)
@@ -268,26 +276,33 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
             logger.IsRawPacketLoggingEnabled ? logger : null).ConfigureAwait(false);
         if (probe?.Reading is null)
         {
-            Quiet(key, connection);
             if (probe?.ForeignTraffic is byte[] traffic && logger.IsRawPacketLoggingEnabled)
                 logger.Info($"Profile {profile.Name}: {connection.VendorId:X4}:{connection.ProductId:X4} answers no known protocol, its own traffic is {Convert.ToHexString(traffic.AsSpan(0, Math.Min(traffic.Length, 16)))}");
             if (probe?.RefusedAnswer is byte[] answer)
             {
                 _refused = true;
-                _resolved = Merge(connection.Battery, probe.Profile);
-                _lastKnown = HidBatteryReader.ParseReply(answer, _resolved).LastKnown ?? _lastKnown;
-                _diagnostics = _diagnostics with { SelectedDevicePath = _resolved.DevicePath };
+                HidBatteryProtocolProfile sleeping = RememberProtocol(connection, Merge(connection.Battery, probe.Profile));
+                _lastKnown = HidBatteryReader.ParseReply(answer, sleeping).LastKnown ?? _lastKnown;
+                _diagnostics = _diagnostics with { SelectedDevicePath = sleeping.DevicePath };
                 logger.Info($"Profile {profile.Name}: {connection.VendorId:X4}:{connection.ProductId:X4} confirmed sleep: {Convert.ToHexString(answer.AsSpan(0, Math.Min(answer.Length, 16)))}");
             }
+            else Quiet(key, connection);
             return null;
         }
-        _probes.Remove(key);
-        SnapshotPaused();
-        _resolved = Merge(connection.Battery, probe.Profile);
-        _diagnostics = _diagnostics with { SelectedDevicePath = _resolved.DevicePath };
+        HidBatteryProtocolProfile resolved = RememberProtocol(connection, Merge(connection.Battery, probe.Profile));
+        _diagnostics = _diagnostics with { SelectedDevicePath = resolved.DevicePath };
         if (logger.IsRawPacketLoggingEnabled)
-            logger.Info($"Profile {profile.Name}: {connection.VendorId:X4}:{connection.ProductId:X4} answered {probe.Reading.Percentage}% via {_resolved.ProtocolName ?? probe.Reading.Detail}, charging={probe.Reading.IsCharging?.ToString() ?? "unknown"}, path={_resolved.DevicePath}");
-        return probe.Reading with { IsCharging = ReadCharging(probe.Response, _resolved) ?? probe.Reading.IsCharging };
+            logger.Info($"Profile {profile.Name}: {connection.VendorId:X4}:{connection.ProductId:X4} answered {probe.Reading.Percentage}% via {resolved.ProtocolName ?? probe.Reading.Detail}, charging={probe.Reading.IsCharging?.ToString() ?? "unknown"}, path={resolved.DevicePath}");
+        return probe.Reading with { IsCharging = ReadCharging(probe.Response, resolved) ?? probe.Reading.IsCharging };
+    }
+
+    private HidBatteryProtocolProfile RememberProtocol(HidDeviceConnectionProfile connection, HidBatteryProtocolProfile battery)
+    {
+        (int Vendor, int Product) key = (connection.VendorId, connection.ProductId);
+        _protocols[key] = battery;
+        _resolved = battery;
+        if (_probes.Remove(key)) SnapshotPaused();
+        return battery;
     }
 
     private void Quiet((int Vendor, int Product) key, HidDeviceConnectionProfile connection)
@@ -337,11 +352,6 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
             && connection.Battery.MatchPrefixHex is not null
             && connection.Battery.PercentageOffset is not null);
 
-    private static bool Same(HidDeviceConnectionProfile left, HidDeviceConnectionProfile right) =>
-        left.VendorId == right.VendorId && left.ProductId == right.ProductId
-        && string.Equals(left.SerialNumber, right.SerialNumber, StringComparison.OrdinalIgnoreCase)
-        && string.Equals(left.Battery.DevicePath, right.Battery.DevicePath, StringComparison.OrdinalIgnoreCase);
-
     private static HidBatteryProtocolProfile Merge(HidBatteryProtocolProfile declared, HidBatteryProtocolProfile discovered) => discovered with
     {
         ChargingOffset = discovered.ChargingOffset ?? declared.ChargingOffset,
@@ -383,7 +393,8 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
     {
         if (_failures > 0 && _failures <= RetryDelays.Length) return RetryDelays[_failures - 1];
         if (_failures > 0 && Settling) return RetryDelays[^1];
-        bool cheapToRetry = CurrentState.ConnectionState == DeviceConnectionState.DeviceOff && _resolved is not null;
+        bool cheapToRetry = _resolved is not null && CurrentState.ConnectionState is
+            DeviceConnectionState.DeviceOff or DeviceConnectionState.Reading or DeviceConnectionState.ReadError;
         return cheapToRetry && interval > SleepPoll ? SleepPoll : interval;
     }
 
