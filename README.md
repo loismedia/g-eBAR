@@ -1,5 +1,11 @@
 # g-eBAR
 
+[![Download](https://img.shields.io/badge/Download-Windows_x64-00BCD4?style=flat-square)](https://github.com/loismedia/g-eBAR/releases/latest/download/g-eBAR.exe)
+[![Release](https://img.shields.io/github/v/release/loismedia/g-eBAR?style=flat-square&label=release)](https://github.com/loismedia/g-eBAR/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
+[![Build](https://github.com/loismedia/g-eBAR/actions/workflows/public.yml/badge.svg?branch=main&event=push)](https://github.com/loismedia/g-eBAR/actions/workflows/public.yml)
+[![Report a bug](https://img.shields.io/badge/Report_a_bug-GitHub-30363D?style=flat-square&logo=github)](https://github.com/loismedia/g-eBAR/issues/new)
+
 A wireless device battery monitor for Windows. Displays the selected device's battery level in the system tray.
 
 **g-eHID** is the companion module: it discovers HID devices, identifies their battery protocol and creates profiles for g-eBAR.
@@ -37,7 +43,7 @@ A wireless device battery monitor for Windows. Displays the selected device's ba
 
 Protocols are matched by Input, Output and Feature report sizes. Vendor IDs only affect the order of probing. Commands are sent to vendor collections (`UsagePage >= 0xFF00`); standard keyboard and mouse collections are excluded. Responses are checked for empty data, echo signatures and consistent repeated readings.
 
-If a stored protocol stops responding, g-eBAR tries the known protocols again. After three unsuccessful scans, full probing pauses for 30 minutes while the stored request continues to be tried. A change in connected interfaces resets the pause. Older profiles are normalized against the protocol catalog without requiring re-creation.
+If a stored protocol stops responding, g-eBAR tries the known protocols again. After three unsuccessful scans, full probing pauses for 30 minutes while the stored request continues to be tried; during the first 10 minutes after startup, the pause is limited to 30 seconds. Manual refresh or a change in connected interfaces resets the pause. Older profiles are normalized against the protocol catalog without requiring re-creation.
 
 ## Charging and sleep
 

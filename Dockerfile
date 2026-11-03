@@ -74,3 +74,4 @@ RUN if [ "$PUBLISH_HID" = "true" ]; then cp "/probe/g-eHID.exe" "/out/g-eHID.exe
 
 FROM scratch AS artifact
 COPY --from=publish /out/ /
+COPY LICENSE /LICENSE
