@@ -25,6 +25,7 @@ internal partial class UpdateWindow : Window
         _release = release;
         _service = service;
         _logger = logger;
+        bool stableRollback = release.TargetChannel is null && release.IsDowngrade;
         Title = Strings.NewVersion;
         AvailableText.Text = release.TargetChannel is ReleaseChannel target ? Strings.ChannelAvailable(target, release.Version.ToString()) : release.AppUpdateAvailable
             ? release.IsDowngrade ? Strings.AvailableStableRollback(release.Version.ToString())
@@ -35,14 +36,14 @@ internal partial class UpdateWindow : Window
         ChangelogViewer.Document = CreateChangelogDocument(release.Changelog);
         ChangelogViewer.Document.Foreground = (System.Windows.Media.Brush)Resources["PrimaryText"];
         HistoryButton.Content = Strings.VersionHistory;
-        DownloadButton.Content = release.IsDowngrade ? Strings.Rollback : Strings.Download;
+        DownloadButton.Content = stableRollback ? Strings.Rollback : Strings.Download;
         HidCheckBox.Content = release.HidVersion is null ? Strings.HidReleaseUnavailable : Strings.HidReleaseVersion(release.HidVersion);
         HidCheckBox.IsEnabled = release.HidUpdateAvailable && release.TargetChannel is null;
         HidCheckBox.IsChecked = release.HidUpdateAvailable && GitHubUpdateService.GetInstalledHidVersion() is not null;
         DownloadButton.IsEnabled = release.AppUpdateAvailable || HidCheckBox.IsChecked == true;
         DownloadProductText.Text = release.AppUpdateAvailable ? Strings.AppName : Strings.HidName;
-        NightlyWarningText.Text = release.IsDowngrade ? Strings.StableRollbackWarning : Strings.NightlyWarning;
-        NightlyWarning.Visibility = release.AppUpdateAvailable && (release.IsNightly || release.IsDowngrade) ? Visibility.Visible : Visibility.Collapsed;
+        NightlyWarningText.Text = stableRollback ? Strings.StableRollbackWarning : Strings.NightlyWarning;
+        NightlyWarning.Visibility = release.AppUpdateAvailable && (release.IsNightly || stableRollback) ? Visibility.Visible : Visibility.Collapsed;
         Loaded += (_, _) => Windows11WindowStyler.Apply(this);
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
         Closed += (_, _) =>

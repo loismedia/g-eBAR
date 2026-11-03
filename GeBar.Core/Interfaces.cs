@@ -7,6 +7,7 @@ public interface IDeviceBatteryMonitor : IAsyncDisposable
     event EventHandler<DeviceBatteryState>? StateChanged;
     Task StartAsync(CancellationToken cancellationToken);
     Task RefreshAsync(CancellationToken cancellationToken);
+    Task RefreshNowAsync(CancellationToken cancellationToken) => RefreshAsync(cancellationToken);
 }
 public interface IAppLogger
 {

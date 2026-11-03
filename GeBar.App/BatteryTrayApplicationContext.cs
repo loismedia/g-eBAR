@@ -222,7 +222,7 @@ internal sealed class BatteryTrayApplicationContext
     {
         try
         {
-            await _monitor.RefreshAsync(_lifetime.Token);
+            await _monitor.RefreshNowAsync(_lifetime.Token);
             _window?.ReloadHistory();
         }
         catch (Exception ex) { _logger.Error("Refresh failed", ex); }

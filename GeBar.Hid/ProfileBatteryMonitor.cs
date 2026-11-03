@@ -74,13 +74,24 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
         return Task.CompletedTask;
     }
 
-    public async Task RefreshAsync(CancellationToken cancellationToken)
+    public Task RefreshAsync(CancellationToken cancellationToken) => RefreshAsync(cancellationToken, false);
+
+    public Task RefreshNowAsync(CancellationToken cancellationToken) => RefreshAsync(cancellationToken, true);
+
+    private async Task RefreshAsync(CancellationToken cancellationToken, bool forceProbe)
     {
         if (_disposed) return;
         try { await _requests.WaitAsync(cancellationToken).ConfigureAwait(false); }
         catch (ObjectDisposedException) { return; }
         try
         {
+            if (forceProbe)
+            {
+                if (_probes.Count > 0) logger.Info($"Profile {profile.Name}: manual refresh resets probe backoff");
+                _probes.Clear();
+                SnapshotPaused();
+                _failures = 0;
+            }
             Dictionary<(int Vendor, int Product), HidDevice[]> live = LiveHandles();
             Retopologize(live);
             ConnectionScan scan = await ScanConnectionsAsync(live, cancellationToken).ConfigureAwait(false);
@@ -283,9 +294,10 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
     {
         int quiet = _probes.GetValueOrDefault(key).Quiet + 1;
         bool pause = quiet >= QuietProbes;
-        _probes[key] = (pause ? 0 : quiet, pause ? DateTimeOffset.Now + ProbeBackoff : DateTimeOffset.MinValue);
+        TimeSpan delay = Settling ? SleepPoll : ProbeBackoff;
+        _probes[key] = (pause ? 0 : quiet, pause ? DateTimeOffset.Now + delay : DateTimeOffset.MinValue);
         SnapshotPaused();
-        if (pause) logger.Info($"Profile {profile.Name}: {connection.VendorId:X4}:{connection.ProductId:X4} answered no probe {QuietProbes} times in a row, probing paused for {ProbeBackoff.TotalMinutes:0} min");
+        if (pause) logger.Info($"Profile {profile.Name}: {connection.VendorId:X4}:{connection.ProductId:X4} answered no probe {QuietProbes} times in a row, probing paused for {delay.TotalSeconds:0} s");
     }
 
     private void SnapshotPaused() => _paused = [.. _probes
