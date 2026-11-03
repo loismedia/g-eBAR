@@ -23,6 +23,7 @@
             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="7"/></Grid.RowDefinitions>
             <StackPanel x:Name="TabStrip" Orientation="Horizontal">
                 <Button x:Name="HomeTab" Style="{StaticResource TabButton}" Click="HomeTabClick"/>
+                <Button x:Name="DpiTab" Content="g-eDPI" Visibility="Collapsed" Style="{StaticResource TabButton}" Click="DpiTabClick"/>
                 <Button x:Name="SettingsTab" Style="{StaticResource TabButton}" Click="SettingsTabClick"/>
                 <Button x:Name="AppearanceTab" Style="{StaticResource TabButton}" Click="AppearanceTabClick"/>
                 <Button x:Name="AboutTab" Style="{StaticResource TabButton}" Click="AboutTabClick" Margin="0"/>
@@ -34,6 +35,7 @@
         </Grid>
 
         <Grid Grid.Row="1">
+            <ContentControl x:Name="DpiPage" Visibility="Collapsed" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"/>
 
             <Grid x:Name="HomePage" Margin="0,0,10,0">
                 <Grid.RowDefinitions>
@@ -53,7 +55,7 @@
                                 <StackPanel VerticalAlignment="Center" Margin="0,0,24,0">
                                     <ComboBox x:Name="DeviceCombo" HorizontalAlignment="Stretch" Width="Auto" Margin="0,0,0,10"
                                               SelectionChanged="DeviceComboChanged"/>
-                                    <TextBlock x:Name="DeviceNameText" TextAlignment="Center" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                                    <TextBlock x:Name="DeviceNameText" TextAlignment="Center" TextWrapping="Wrap" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,10"/>
                                     <Border Height="30" CornerRadius="6" BorderBrush="{DynamicResource PrimaryText}" BorderThickness="2" Padding="3">
                                         <Grid x:Name="BatteryTrack" ClipToBounds="True">
                                             <Border x:Name="BatteryFill" Background="{DynamicResource AccentBrush}" CornerRadius="3" HorizontalAlignment="Left"/>
@@ -205,6 +207,7 @@
                     </StackPanel>
                     <Button x:Name="SwitchPublicButton" HorizontalAlignment="Right" Margin="0,12,0,0" Click="SwitchPublicClick" Visibility="Collapsed"/>
                     <Button x:Name="RemoveHidButton" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Right" MinWidth="180" Margin="0,16,0,0" Click="RemoveHidClick"/>
+                    <Button x:Name="RemoveDpiButton" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Right" MinWidth="180" Margin="0,8,0,0" Click="RemoveDpiClick"/>
                 </StackPanel>
             </ScrollViewer>
 

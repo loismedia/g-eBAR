@@ -40,6 +40,12 @@ internal partial class ControlCenterWindow : Window
     private DateTimeOffset _historyLoaded;
     private readonly bool _diagnosticsMode;
     private readonly FileLogger _logger;
+    private readonly SettingsModuleLoader _moduleLoader = new();
+    private readonly CancellationTokenSource _moduleLifetime = new();
+    private readonly Func<string, HidDeviceProfile?>? _resolveDevice;
+    private HidDeviceProfile? _moduleDevice;
+    private string? _deviceDisplayName;
+    private DateTimeOffset? _settingsRead;
     private readonly System.Windows.Threading.DispatcherTimer _saveFeedbackTimer = new() { Interval = TimeSpan.FromMilliseconds(1400) };
     public AppSettings Value { get; private set; }
     public event EventHandler? OpenLogsRequested;
@@ -70,6 +76,8 @@ internal partial class ControlCenterWindow : Window
         AutoSwitchRow.Visibility = multiDevice;
         RawRow.Style = (Style)Resources[_deviceOptions.Length > 1 ? "Row" : "LastRow"];
         _suppressDeviceChange = false;
+        UpdateDeviceNames();
+        RefreshModuleDevice();
     }
 
     private async void DeviceComboChanged(object sender, SelectionChangedEventArgs e)
@@ -79,12 +87,13 @@ internal partial class ControlCenterWindow : Window
         if (SettingsSaved is { } save) await save(Value);
     }
 
-    public ControlCenterWindow(AppSettings value, bool diagnostics, string githubToken, FileLogger logger)
+    public ControlCenterWindow(AppSettings value, bool diagnostics, string githubToken, FileLogger logger, Func<string, HidDeviceProfile?>? resolveDevice = null)
     {
         InitializeComponent();
         Value = value;
         _diagnosticsMode = diagnostics;
         _logger = logger;
+        _resolveDevice = resolveDevice;
         DiagnosticsCard.Visibility = diagnostics ? Visibility.Visible : Visibility.Collapsed;
         HistoryCard.Visibility = diagnostics ? Visibility.Collapsed : Visibility.Visible;
         InitializeText();
@@ -114,6 +123,12 @@ internal partial class ControlCenterWindow : Window
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
         Closed += (_, _) => SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
         Closed += (_, _) => _saveFeedbackTimer.Stop();
+        Closed += (_, _) =>
+        {
+            _moduleLifetime.Cancel();
+            _moduleLoader.Dispose();
+            _moduleLifetime.Dispose();
+        };
     }
 
     private void InitializeText()
@@ -130,6 +145,7 @@ internal partial class ControlCenterWindow : Window
         UpdatesButton.Content = Strings.CheckUpdates;
         HidButton.Content = Strings.HidName;
         RemoveHidButton.Content = Strings.RemoveHid;
+        RemoveDpiButton.Content = Strings.RemoveDpi;
         ReportBugButton.ToolTip = Strings.ReportBug;
         ChangelogButton.ToolTip = Strings.VersionHistory;
         HistoryTitleText.Text = Strings.BatteryHistory;
@@ -204,7 +220,13 @@ internal partial class ControlCenterWindow : Window
             return;
         }
         _percentage = state.Percentage ?? 0;
-        DeviceNameText.Text = state.DeviceName ?? Strings.DefaultDevice;
+        _deviceDisplayName = state.DeviceName;
+        UpdateDeviceNames();
+        if (state.ConnectionState == DeviceConnectionState.DeviceConnected && state.LastSuccessfulRead != _settingsRead)
+        {
+            _settingsRead = state.LastSuccessfulRead;
+            RefreshDeviceSettings();
+        }
         PercentageText.Text = state.Percentage is int percentage ? $"{percentage}%" : Strings.EmptyValue;
         ChargingIconText.Visibility = state.IsCharging == true ? Visibility.Visible : Visibility.Collapsed;
         StatusText.Text = Strings.Status(state);
@@ -235,7 +257,9 @@ internal partial class ControlCenterWindow : Window
         SettingsPage.Visibility = page == SettingsPage ? Visibility.Visible : Visibility.Collapsed;
         AppearancePage.Visibility = page == AppearancePage ? Visibility.Visible : Visibility.Collapsed;
         AboutPage.Visibility = page == AboutPage ? Visibility.Visible : Visibility.Collapsed;
-        SaveButton.Visibility = page == SettingsPage || page == AppearancePage ? Visibility.Visible : Visibility.Collapsed;
+        DpiPage.Visibility = page == DpiPage ? Visibility.Visible : Visibility.Collapsed;
+        SaveButton.Visibility = page == SettingsPage || page == AppearancePage || page == DpiPage ? Visibility.Visible : Visibility.Collapsed;
+        SaveButton.IsEnabled = page != DpiPage || _moduleLoader.Module?.CanSave == true;
         StyleTabs(tab);
     }
 
@@ -243,6 +267,7 @@ internal partial class ControlCenterWindow : Window
     {
         _activeTab = selected;
         StyleTab(HomeTab, selected);
+        StyleTab(DpiTab, selected);
         StyleTab(SettingsTab, selected);
         StyleTab(AppearanceTab, selected);
         StyleTab(AboutTab, selected);
@@ -277,6 +302,45 @@ internal partial class ControlCenterWindow : Window
     }
 
     private void HomeTabClick(object sender, RoutedEventArgs e) => ShowPage(HomePage, HomeTab);
+    private void DpiTabClick(object sender, RoutedEventArgs e)
+    {
+        ShowPage(DpiPage, DpiTab);
+        RefreshModuleDevice();
+    }
+
+    private async void RefreshModuleDevice()
+    {
+        if (_moduleLifetime.IsCancellationRequested || _moduleLoader.Module is not ISettingsModule module) return;
+        HidDeviceProfile? device = _resolveDevice?.Invoke(Value.SelectedDeviceId);
+        if (device == _moduleDevice && _moduleDevice is not null) return;
+        _moduleDevice = device;
+        await module.SetDeviceAsync(device, _moduleLifetime.Token);
+    }
+
+    private async void RefreshDeviceSettings()
+    {
+        if (_moduleLifetime.IsCancellationRequested || _moduleLoader.Module is not IDeviceSettingsSource source) return;
+        await source.RefreshSettingsAsync(_moduleLifetime.Token);
+    }
+
+    private void UpdateDeviceNames()
+    {
+        DeviceSettingsSummary? summary = (_moduleLoader.Module as IDeviceSettingsSource)?.CurrentSettings;
+        string? parameters = summary?.DeviceId == Value.SelectedDeviceId ? summary.Display : null;
+        DeviceNameText.Text = FormatDeviceName(_deviceOptions.FirstOrDefault(option => option.Id == Value.SelectedDeviceId).Name ?? _deviceDisplayName ?? Strings.DefaultDevice, parameters);
+        if (_deviceOptions.Length == 0) return;
+        string[] names = [.. _deviceOptions.Select(option => FormatDeviceName(option.Name, option.Id == Value.SelectedDeviceId ? parameters : null))];
+        if (DeviceCombo.ItemsSource is string[] existing && existing.SequenceEqual(names)) return;
+        _suppressDeviceChange = true;
+        try
+        {
+            DeviceCombo.ItemsSource = names;
+            DeviceCombo.SelectedIndex = Array.FindIndex(_deviceOptions, option => option.Id == Value.SelectedDeviceId);
+        }
+        finally { _suppressDeviceChange = false; }
+    }
+
+    internal static string FormatDeviceName(string name, string? parameters) => parameters is null ? name : $"{name} {parameters}";
     private void SettingsTabClick(object sender, RoutedEventArgs e) => ShowPage(SettingsPage, SettingsTab);
     private void AppearanceTabClick(object sender, RoutedEventArgs e) => ShowPage(AppearancePage, AppearanceTab);
     private void AboutTabClick(object sender, RoutedEventArgs e) => ShowPage(AboutPage, AboutTab);
@@ -284,18 +348,61 @@ internal partial class ControlCenterWindow : Window
     {
         ReloadHistory();
         DevicesRefreshRequested?.Invoke(this, EventArgs.Empty);
+        RefreshDeviceSettings();
     }
     private void LogsClick(object sender, RoutedEventArgs e) => OpenLogsRequested?.Invoke(this, EventArgs.Empty);
     private void UpdatesClick(object sender, RoutedEventArgs e) => CheckUpdatesRequested?.Invoke(this, EventArgs.Empty);
     private void HidClick(object sender, RoutedEventArgs e) => HidLaunchRequested?.Invoke(this, EventArgs.Empty);
     private void RemoveHidClick(object sender, RoutedEventArgs e) => HidRemoveRequested?.Invoke(this, EventArgs.Empty);
+    private void RemoveDpiClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            GitHubUpdateService.RemoveDpi();
+            UpdateHidState();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            _logger.Error("Cannot remove g-eDPI", error);
+            AppDialog.Show(this, error.Message, Strings.AppName);
+        }
+    }
 
     public void UpdateHidState()
     {
         string? version = GitHubUpdateService.GetInstalledHidVersion();
-        ModulesList.ItemsSource = version is null ? Array.Empty<string>() : [Strings.HidVersion(version)];
-        ModulesPanel.Visibility = version is null ? Visibility.Collapsed : Visibility.Visible;
+        string? dpiVersion = GitHubUpdateService.GetInstalledDpiVersion();
+        if (_moduleLoader.Module?.Version != dpiVersion)
+        {
+            DpiPage.Content = null;
+            _moduleLoader.Dispose();
+            _moduleDevice = null;
+            _moduleLoader.Load(GitHubUpdateService.DpiModulePath, _logger);
+            if (_moduleLoader.Module is ISettingsModule module)
+            {
+                DpiPage.Content = module.View;
+                module.SaveAvailabilityChanged += (_, _) =>
+                {
+                    if (DpiPage.Visibility == Visibility.Visible) SaveButton.IsEnabled = module.CanSave;
+                };
+                if (module is IDeviceSettingsSource source) source.SettingsChanged += (_, _) => UpdateDeviceNames();
+            }
+            DpiTab.Visibility = _moduleLoader.Module is null ? Visibility.Collapsed : Visibility.Visible;
+            if (DpiPage.Visibility == Visibility.Visible)
+            {
+                if (_moduleLoader.Module is null) ShowPage(HomePage, HomeTab);
+                else RefreshModuleDevice();
+            }
+        }
+        var modules = new List<string>();
+        if (version is not null) modules.Add(Strings.HidVersion(version));
+        if (dpiVersion is not null) modules.Add($"g-eDPI {dpiVersion}");
+        ModulesList.ItemsSource = modules;
+        ModulesPanel.Visibility = modules.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         RemoveHidButton.Visibility = version is null ? Visibility.Collapsed : Visibility.Visible;
+        RemoveDpiButton.Visibility = File.Exists(AppPaths.GeDpiLibrary) ? Visibility.Visible : Visibility.Collapsed;
+        UpdateDeviceNames();
+        if (_deviceOptions.Length > 0) RefreshModuleDevice();
     }
     private void HistoryPlotSizeChanged(object sender, SizeChangedEventArgs e) => DrawHistory();
 
@@ -475,6 +582,24 @@ internal partial class ControlCenterWindow : Window
     private async void SaveClick(object sender, RoutedEventArgs e)
     {
         if (!SaveButton.IsEnabled) return;
+        if (DpiPage.Visibility == Visibility.Visible && _moduleLoader.Module is ISettingsModule module)
+        {
+            _saveFeedbackTimer.Stop();
+            SaveButton.Content = Strings.Saving;
+            SaveButton.IsEnabled = false;
+            TabStrip.IsEnabled = DeviceCombo.IsEnabled = false;
+            try
+            {
+                if (await module.SaveAsync(_moduleLifetime.Token) && IsVisible) ShowSaveConfirmation();
+                else SaveButton.Content = Strings.Save;
+            }
+            finally
+            {
+                SaveButton.IsEnabled = module.CanSave;
+                TabStrip.IsEnabled = DeviceCombo.IsEnabled = true;
+            }
+            return;
+        }
         if (!int.TryParse(WarningBox.Text, out int warning) || warning is < 5 or > 50)
         {
             _logger.Warning($"Settings validation failed: WarningThreshold='{LogValue(WarningBox.Text)}'; expected 5..50");
