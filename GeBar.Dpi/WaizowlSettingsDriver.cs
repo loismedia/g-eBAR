@@ -58,12 +58,12 @@ public sealed class WaizowlSettingsDriver(IAppLogger logger) : IMouseSettingsDri
         if (wireless)
         {
             byte[] receiver = await Exchange(stream, Request(0x01, 1), token, trace).ConfigureAwait(false);
-            if ((receiver[5] & 8) == 0) throw new IOException(Text.Unavailable);
             layout = Identify(receiver.AsSpan(12, 4));
         }
         else layout = ProductLayout(product);
         byte[] status = await Exchange(stream, Request(wireless ? (byte)0x41 : (byte)0x01, 1), token, trace).ConfigureAwait(false);
-        byte[] sensor = await Exchange(stream, Request(wireless ? (byte)0x44 : (byte)0x04, 1), token, trace).ConfigureAwait(false);
+        byte[] sensor = await Exchange(stream, Request(wireless ? (byte)0x44 : (byte)0x04, 1), token, trace,
+            packet => IsSensorSnapshot(packet, layout.MaximumDpi, layout.LodOffset)).ConfigureAwait(false);
         int active = sensor[8];
         if (active > 4 || (sensor[7] & (1 << active)) == 0 || status[9] != active) throw new InvalidDataException(Text.InvalidResponse);
         int dpi = BinaryPrimitives.ReadUInt16LittleEndian(sensor.AsSpan(9 + active * 4, 2));
@@ -78,7 +78,7 @@ public sealed class WaizowlSettingsDriver(IAppLogger logger) : IMouseSettingsDri
     {
         byte[] packet = [.. current.Packet];
         bool wireless = packet[1] == 0x44;
-        if (packet.Length != 65 || packet[1] is not (0x44 or 0x04) || packet[4] != 1
+        if (packet.Length != 65 || packet[1] is not (0x44 or 0x04) || packet[4] is not (1 or 2)
             || !Limits(wireless, current.Layout.MaximumDpi).Accepts(requested)) throw new InvalidDataException(Text.InvalidResponse);
         packet[4] = 2;
         if (requested.Dpi != current.Settings.Dpi)
@@ -139,13 +139,29 @@ public sealed class WaizowlSettingsDriver(IAppLogger logger) : IMouseSettingsDri
         packet[64] = unchecked((byte)(0xA1 - sum));
     }
 
-    private static async Task<byte[]> Exchange(Stream stream, byte[] request, CancellationToken token, IAppLogger? trace = null)
+    internal static bool MatchesReply(byte[] packet, byte[] request) => packet.Length == 65 && packet[0] == 0 && packet[1] == request[1]
+        && (packet[4] == request[4] || request[1] is 0x04 or 0x44 && request[4] == 1 && packet[4] == 2);
+
+    private static bool IsSensorSnapshot(byte[] packet, int maximumDpi, int lodOffset)
+    {
+        int active = packet[8];
+        if (active > 4 || (packet[7] & (1 << active)) == 0 || packet[lodOffset] is not (1 or 2)) return false;
+        int dpi = BinaryPrimitives.ReadUInt16LittleEndian(packet.AsSpan(9 + active * 4, 2));
+        return dpi >= 100 && dpi <= maximumDpi && dpi % 50 == 0;
+    }
+
+    private static async Task<byte[]> Exchange(Stream stream, byte[] request, CancellationToken token, IAppLogger? trace = null, Func<byte[], bool>? validate = null)
     {
         for (int attempt = 0; attempt < 2; attempt++)
         {
+            await Task.Delay(100, token).ConfigureAwait(false);
             if (trace?.IsRawPacketLoggingEnabled == true) trace.Info($"g-eDPI Waizowl TX [{request.Length}] {Convert.ToHexString(request)}");
             byte[]? response = await HidRequestExchange.WriteThenReadInputAsync(stream, request, 65, null, TimeSpan.FromMilliseconds(1200), token,
-                accept: packet => packet.Length == 65 && packet[0] == 0 && packet[1] == request[1] && packet[3] == 0x8C && packet[4] == request[4]).ConfigureAwait(false);
+                unmatched: packet =>
+                {
+                    if (trace?.IsRawPacketLoggingEnabled == true) trace.Info($"g-eDPI Waizowl RX [{packet.Length}] {Convert.ToHexString(packet)} ignored");
+                },
+                accept: packet => MatchesReply(packet, request) && (validate is null || validate(packet))).ConfigureAwait(false);
             if (response is not null)
             {
                 if (trace?.IsRawPacketLoggingEnabled == true) trace.Info($"g-eDPI Waizowl RX [{response.Length}] {Convert.ToHexString(response)}");

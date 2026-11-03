@@ -73,17 +73,35 @@ public class WaizowlSettingsTests
         Assert.Equal(1, stream.Requests[0][1]);
     }
 
-    [Fact]
-    public async Task SleepingReceiverCannotReceiveSettingsWrites()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2)]
+    [InlineData(8)]
+    public async Task ReceiverFlagDoesNotOverrideValidatedMouseResponse(byte flag)
     {
         byte[] receiver = Receiver("F3070000");
-        receiver[5] = 0;
-        using var stream = new Firmware([receiver]);
+        receiver[5] = flag;
+        using var stream = new Firmware([receiver, Status(Original), Sensor(Original, 29)]);
+
+        WaizowlSettingsDriver.Snapshot snapshot = await WaizowlSettingsDriver.ReadSnapshot(stream, 0x0728, CancellationToken.None);
+
+        Assert.Equal(Original, snapshot.Settings);
+    }
+
+    [Fact]
+    public async Task NonrespondingMouseCannotReceiveSettingsWrites()
+    {
+        using var stream = new Firmware([Receiver("F3070000")], allowSilence: true);
         var driver = new WaizowlSettingsDriver(new Logger());
+        using var cancellation = new CancellationTokenSource();
 
-        await Assert.ThrowsAsync<IOException>(() => driver.Save(stream, 0x0728, Original, Original with { Dpi = 400 }, CancellationToken.None));
+        Task<MouseSettings> save = driver.Save(stream, 0x0728, Original, Original with { Dpi = 400 }, cancellation.Token);
+        await stream.SilenceReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await cancellation.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => save);
 
-        Assert.Single(stream.Requests);
+        Assert.DoesNotContain(stream.Requests, packet => packet[4] == 2 || packet[1] == 0x4A);
+        Assert.Equal(new byte[] { 1, 0x41 }, stream.Requests.Select(packet => packet[1]));
     }
 
     [Fact]
@@ -147,6 +165,67 @@ public class WaizowlSettingsTests
         Assert.False(driver.Supports(profile with { ProductId = 0xFFFF }));
         Assert.False(driver.Supports(profile with { VendorId = 0xFFFF }));
     }
+
+    [Theory]
+    [InlineData(0x0728)]
+    [InlineData(0x07A2)]
+    public async Task CapturedReceiverAndStatusWorkWithLongSensorReply(int product)
+    {
+        byte[] receiver = LogPacket("0001008C0102151928070601F5070000", "B1");
+        byte[] status = product == 0x0728 ? LogPacket("0041008C0100003300020306") : LogPacket("0001008C0100013F00020303", "CB");
+        byte[] sensor = Sensor(Original, 29);
+        sensor[1] = product == 0x0728 ? (byte)0x44 : (byte)0x04;
+        sensor[8] = 2;
+        BinaryPrimitives.WriteUInt16LittleEndian(sensor.AsSpan(17, 2), 800);
+        BinaryPrimitives.WriteUInt16LittleEndian(sensor.AsSpan(19, 2), 800);
+        using var stream = new Firmware(product == 0x0728 ? [receiver, status, sensor] : [status, sensor]);
+
+        WaizowlSettingsDriver.Snapshot snapshot = await WaizowlSettingsDriver.ReadSnapshot(stream, product, CancellationToken.None);
+
+        Assert.Equal(Original, snapshot.Settings);
+        Assert.Equal("OGM PRO V2", snapshot.Layout.Name);
+        Assert.Equal(0xBC, snapshot.Packet[3]);
+        Assert.Equal(0x02, receiver[5]);
+    }
+
+    [Theory]
+    [InlineData(0x8C)]
+    [InlineData(0xBC)]
+    [InlineData(0x80)]
+    public void ReplyLengthByteIsNotRestrictedToStatusPackets(byte length)
+    {
+        byte[] reply = Packet(0x04, 1);
+        reply[3] = length;
+
+        Assert.True(WaizowlSettingsDriver.MatchesReply(reply, WaizowlSettingsDriver.Request(0x04, 1)));
+        Assert.False(WaizowlSettingsDriver.MatchesReply(reply, WaizowlSettingsDriver.Request(0x41, 1)));
+    }
+
+    [Fact]
+    public async Task SensorReplyWithWriteSubtypeCanStillProvideReadback()
+    {
+        byte[] sensor = Sensor(Original, 29);
+        sensor[4] = 2;
+        using var stream = new Firmware([Receiver("F5070000"), Status(Original), sensor]);
+
+        Assert.Equal(Original, (await WaizowlSettingsDriver.ReadSnapshot(stream, 0x0728, CancellationToken.None)).Settings);
+    }
+
+    [Fact]
+    public async Task EmptySensorAcknowledgementIsSkippedAndLogged()
+    {
+        byte[] ack = Packet(0x44, 2);
+        ack[3] = 0x80;
+        var logger = new Logger(raw: true);
+        using var stream = new Firmware([Receiver("F5070000"), Status(Original), Sensor(Original, 29)]) { SensorAckBeforeReply = ack };
+
+        WaizowlSettingsDriver.Snapshot snapshot = await WaizowlSettingsDriver.ReadSnapshot(stream, 0x0728, CancellationToken.None, logger);
+
+        Assert.Equal(Original, snapshot.Settings);
+        Assert.Contains(logger.Messages, message => message.Contains(Convert.ToHexString(ack)) && message.EndsWith(" ignored"));
+    }
+
+    private static byte[] LogPacket(string prefix, string checksum = "00") => Convert.FromHexString(prefix.PadRight(128, '0') + checksum);
 
     [Theory]
     [InlineData(0xFF00)]
@@ -268,6 +347,7 @@ public class WaizowlSettingsTests
     private static byte[] Sensor(MouseSettings settings, int lodOffset)
     {
         byte[] packet = Packet(0x44, 1);
+        packet[3] = 0xBC;
         packet[5] = 0x35;
         packet[6] = WaizowlSettingsDriver.EncodePolling(settings.PollingRate);
         packet[7] = 31;
@@ -283,11 +363,13 @@ public class WaizowlSettingsTests
         return packet;
     }
 
-    private sealed class Firmware(byte[][] responses) : Stream
+    private sealed class Firmware(byte[][] responses, bool allowSilence = false) : Stream
     {
         private readonly Channel<byte[]> _incoming = Channel.CreateUnbounded<byte[]>();
         private readonly Queue<byte[]> _responses = new(responses);
         public List<byte[]> Requests { get; } = [];
+        public TaskCompletionSource SilenceReached { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public byte[]? SensorAckBeforeReply { get; init; }
         public override bool CanRead => true;
         public override bool CanSeek => false;
         public override bool CanWrite => true;
@@ -311,19 +393,31 @@ public class WaizowlSettingsTests
             byte[] request = buffer.ToArray();
             Requests.Add(request);
             if (request[1] is 0x4A or 0x0A) return ValueTask.CompletedTask;
-            byte[] response = _responses.Dequeue();
+            if (!_responses.TryDequeue(out byte[]? response))
+            {
+                if (allowSilence)
+                {
+                    SilenceReached.TrySetResult();
+                    return ValueTask.CompletedTask;
+                }
+                throw new InvalidOperationException("No response configured for request");
+            }
             Assert.Equal(response[1], request[1]);
-            Assert.Equal(response[4], request[4]);
+            if (request[1] is 0x04 or 0x44 && request[4] == 1) Assert.True(response[4] is 1 or 2);
+            else Assert.Equal(response[4], request[4]);
+            if (SensorAckBeforeReply is not null && request[1] is 0x04 or 0x44 && request[4] == 1)
+                _incoming.Writer.TryWrite(SensorAckBeforeReply);
             _incoming.Writer.TryWrite(response);
             return ValueTask.CompletedTask;
         }
     }
 
-    private sealed class Logger : IAppLogger
+    private sealed class Logger(bool raw = false) : IAppLogger
     {
+        public List<string> Messages { get; } = [];
         public string LogDirectory => Path.GetTempPath();
-        public bool IsRawPacketLoggingEnabled => false;
-        public void Info(string message) { }
+        public bool IsRawPacketLoggingEnabled => raw;
+        public void Info(string message) => Messages.Add(message);
         public void Warning(string message) { }
         public void Error(string message, Exception? exception = null) { }
     }
