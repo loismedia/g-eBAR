@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/loismedia/g-eBAR?style=flat-square&label=release)](https://github.com/loismedia/g-eBAR/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 [![Build](https://github.com/loismedia/g-eBAR/actions/workflows/public.yml/badge.svg?branch=main&event=push)](https://github.com/loismedia/g-eBAR/actions/workflows/public.yml)
-[![Report a bug](https://img.shields.io/badge/Report_a_bug-GitHub-30363D?style=flat-square&logo=github)](https://github.com/loismedia/g-eBAR/issues/new)
+[![Report a bug](https://img.shields.io/badge/Report_a_bug-In_app-30363D?style=flat-square)](#diagnostics-and-bug-reports)
 
 A wireless device battery monitor for Windows. Displays the selected device's battery level in the system tray.
 
@@ -12,7 +12,7 @@ A wireless device battery monitor for Windows. Displays the selected device's ba
 
 | | |
 |---|---|
-| Version | 1.4.0 |
+| Version | 1.4.x |
 | Windows | Windows 11; Mica requires 22H2 (build 22621). Windows 10 has not been tested. |
 | Framework | `net10.0-windows` |
 | Interface | WPF; native tray icon and menu through `Shell_NotifyIcon` |
@@ -27,19 +27,23 @@ A wireless device battery monitor for Windows. Displays the selected device's ba
 
 ## Device support
 
-| Battery source | Devices | Status |
+✅ Tested on hardware · 🔄 Implemented, needs testing · ➖ Not supported yet
+
+| Devices | Battery source | Readiness |
 |---|---|---|
-| Logitech Gaming `0x51` | LIGHTSPEED receivers | Tested |
-| Feature `0x83` | WLMOUSE HUAN 8K and compatible devices | Tested |
-| FEA status `0xF7` | RY5088 receivers: MonsGeek, Akko, AJAZZ | Tested on MonsGeek; byte 4 indicates sleep, not charging |
-| Compx report 8 `0x04` | VGN and compatible devices | Tested |
-| Waizowl `0x41` | OGM V2 Pro, OGM 8K through a receiver | Tested on a tester's device |
-| Waizowl `0x01` | Wired OGM | Implemented from tester logs; battery packets use the `8C 01 00` marker |
-| Beast X `0x04/0x1A` | WLMOUSE Beast X | Implemented, not tested on hardware |
-| HID++ 2.0 `0x1000` | Logitech | Implemented, not tested on hardware |
-| HID usages `0x06:0x20`, `0x85` | Bluetooth devices and controllers | Implemented, not tested on hardware |
-| Windows PnP | Bluetooth devices whose battery level is available to Windows | Matches names from the profile; battery readings have not been confirmed on hardware |
-| 33-byte Input/Output receivers | `36B0:3002` and similar devices | Not supported yet |
+| Logitech LIGHTSPEED receivers | Gaming `0x51` | ✅ Tested |
+| WLMOUSE HUAN 8K and compatible devices | Feature `0x83` | ✅ Tested |
+| MonsGeek, Akko, AJAZZ with RY5088 receivers | FEA `0xF7` | ✅ Tested on MonsGeek |
+| VGN and compatible devices | Compx report 8 `0x04` | ✅ Tested |
+| Waizowl OGM V2 Pro / OGM 8K via receiver | Waizowl `0x41` | ✅ Tested |
+| Waizowl OGM via cable | Waizowl `0x01` | 🔄 Based on tester logs |
+| WLMOUSE Beast X | Beast X `0x04/0x1A` | 🔄 Needs testing |
+| Logitech devices with HID++ 2.0 | HID++ `0x1000` | 🔄 Needs testing |
+| Bluetooth devices and controllers | HID battery usages `0x06:0x20`, `0x85` | 🔄 Needs testing |
+| Bluetooth devices exposing battery level to Windows | Windows PnP | 🔄 Needs testing |
+| Receivers with 33-byte Input/Output reports (`36B0:3002` and similar) | No matching protocol | ➖ Not supported |
+
+Waizowl wired support uses the `8C 01 00` battery marker from tester logs. Windows PnP readings match device names from the profile. On RY5088 receivers, byte 4 indicates sleep, not charging.
 
 Protocols are matched by Input, Output and Feature report sizes. Vendor IDs only affect the order of probing. Commands are sent to vendor collections (`UsagePage >= 0xFF00`); standard keyboard and mouse collections are excluded. Responses are checked for empty data, echo signatures and consistent repeated readings.
 
@@ -102,9 +106,17 @@ Out-of-range values are clamped when loaded. Public and dev share settings and p
 
 Public updates do not require a GitHub token. To access dev, hold Ctrl and double-click the version on the About page, enter a token with read access to the dev repository and select **Switch to dev**. Dev provides **Return to public version** without requiring a token. Switching preserves data and replaces an installed g-eHID module with its counterpart from the target channel. Tokens are stored in Windows Credential Manager as `g-eBAR/GitHub`, never in configuration files.
 
-## Diagnostics
+## Diagnostics and bug reports
 
-Logs are stored in `%LocalAppData%\g-eBAR\Logs`, limited to 1 MB per file and 10 MB in total. The bug button on the About page opens a GitHub issue with device state, protocol and build details. Copies of today's g-eBAR and g-eHID logs are prepared for manual attachment.
+Use the built-in bug reporter so your issue includes the information needed to investigate it:
+
+1. Open the control center and select the affected device.
+2. Open **About** and click **🐞 Report bug**.
+3. Describe the problem and how to reproduce it, then confirm the report.
+
+g-eBAR opens a prefilled GitHub issue with the device state, protocol, app and module versions, and Windows details. It also opens a folder with copies of today's g-eBAR and g-eHID logs. Attach those files to the issue, then submit it on GitHub.
+
+Logs are stored in `%LocalAppData%\g-eBAR\Logs`, limited to 1 MB per file and 10 MB in total.
 
 | Option | Purpose |
 |---|---|
@@ -112,7 +124,7 @@ Logs are stored in `%LocalAppData%\g-eBAR\Logs`, limited to 1 MB per file and 10
 | `--probe` | Probe devices without the GUI; exits with code 3 if no battery is found |
 | `--ui-smoke-test` | Open and close application windows; exits with code 2 on failure |
 
-## Building and releases
+## Building from source
 
 Build and run tests on Windows with .NET SDK 10:
 
@@ -120,8 +132,6 @@ Build and run tests on Windows with .NET SDK 10:
 dotnet test g-eBAR.sln -c Release --disable-build-servers -m:1
 dotnet publish GeBar.App/GeBar.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
 ```
-
-Pushes and pull requests from this repository compile the tests and build both Windows applications in a Linux Docker container on the self-hosted `loispg` runner. Run tests and UI smoke checks locally on Windows. Build artifacts are available in GitHub Actions. A `vX.Y.Z` tag matching `Directory.Build.props` publishes a release. Previous releases and version tags are retained. Version history comes from GitHub Releases.
 
 ## Credits
 
