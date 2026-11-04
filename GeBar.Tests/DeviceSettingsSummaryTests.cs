@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Threading;
 using GeBar.App;
 using GeBar.Core;
@@ -82,6 +83,54 @@ public class DeviceSettingsSummaryTests
     });
 
     [Fact]
+    public void PreloadedSettingsAppearBeforeDeviceReadCompletes() => Sta(async () =>
+    {
+        var driver = new Driver();
+        using var module = new DpiModule(new Logger(), [driver]);
+        await module.SetDeviceAsync(Device, CancellationToken.None);
+        HidDeviceProfile other = Device with { Id = "mouse-b", Name = "Mouse B" };
+        driver.Settings = new(400, 1000, 2);
+        await module.PreloadSettingsAsync([other], CancellationToken.None);
+        driver.ReadReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        Task change = module.SetDeviceAsync(other, CancellationToken.None);
+
+        Assert.False(change.IsCompleted);
+        Assert.Equal(new DeviceSettingsSummary(other.Id, 400, 1000, 2), module.CurrentSettings);
+        Assert.Equal("400", Assert.Single(Descendants(module.View).OfType<TextBox>()).Text);
+        Assert.False(module.CanSave);
+        driver.Settings = new(1600, 1000, 1);
+        driver.ReadReady.SetResult();
+        await change;
+
+        Assert.Equal(new DeviceSettingsSummary(other.Id, 1600, 1000, 1), module.CurrentSettings);
+    });
+
+    [Theory]
+    [InlineData("800", 120, "850")]
+    [InlineData("800", -120, "750")]
+    [InlineData("801", 120, "850")]
+    [InlineData("801", -120, "800")]
+    [InlineData("30000", 120, "30000")]
+    [InlineData("50", -120, "50")]
+    public void DpiWheelUsesDeviceStepWithoutWriting(string initial, int delta, string expected) => Sta(async () =>
+    {
+        var driver = new Driver();
+        using var module = new DpiModule(new Logger(), [driver]);
+        await module.SetDeviceAsync(Device, CancellationToken.None);
+        TextBox input = Assert.Single(Descendants(module.View).OfType<TextBox>());
+        input.Text = initial;
+        var wheel = new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, delta) { RoutedEvent = Mouse.PreviewMouseWheelEvent };
+
+        input.RaiseEvent(wheel);
+
+        Assert.True(wheel.Handled);
+        Assert.Equal(expected, input.Text);
+        Assert.Equal(0, driver.Saves);
+        Assert.Equal(800, module.CurrentSettings?.Dpi);
+    });
+
+    [Fact]
     public void SelectedDeviceDoesNotInheritAnotherMousesParameters() => Sta(() =>
     {
         string directory = Path.Combine(Path.GetTempPath(), $"gebar-summary-{Guid.NewGuid():N}");
@@ -148,11 +197,16 @@ public class DeviceSettingsSummaryTests
 
     private sealed class Driver : IMouseSettingsDriver
     {
+        public TaskCompletionSource? ReadReady { get; set; }
         public MouseSettings Settings { get; set; } = new(800, 1000, 1);
         public int Saves { get; private set; }
         public MouseSettingsCapabilities Capabilities { get; } = new(50, 30000, 50, [1000], [1, 2]);
-        public bool Supports(HidDeviceProfile device) => device.Id == Device.Id;
-        public Task<MouseSettings> ReadAsync(HidDeviceProfile device, CancellationToken token) => Task.FromResult(Settings);
+        public bool Supports(HidDeviceProfile device) => device.Id != "unsupported";
+        public async Task<MouseSettings> ReadAsync(HidDeviceProfile device, CancellationToken token)
+        {
+            if (ReadReady is not null) await ReadReady.Task.WaitAsync(token);
+            return Settings;
+        }
         public Task<MouseSettings> SaveAsync(HidDeviceProfile device, MouseSettings expected, MouseSettings requested, CancellationToken token)
         {
             Saves++;

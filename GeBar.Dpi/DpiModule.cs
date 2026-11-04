@@ -4,20 +4,24 @@ using System.Globalization;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Automation;
 
 namespace GeBar.Dpi;
 
 public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
 {
     private readonly IAppLogger _logger;
-    private readonly IMouseSettingsDriver[] _drivers;
+    private readonly Func<IMouseSettingsDriver>[] _drivers;
     private readonly TextBlock _deviceName = new() { FontWeight = FontWeights.SemiBold };
     private readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap, Margin = new(0, 12, 0, 0) };
     private readonly TextBlock _range = new() { FontSize = 12, Margin = new(0, 4, 0, 0) };
     private readonly TextBox _dpi = new();
-    private readonly ComboBox _polling = new() { MinWidth = 144, DisplayMemberPath = "Label", SelectedValuePath = "Value" };
-    private readonly ComboBox _lod = new() { MinWidth = 144, DisplayMemberPath = "Label", SelectedValuePath = "Value" };
-    private readonly Button _refresh = new() { Content = Text.Read, HorizontalAlignment = HorizontalAlignment.Left, Margin = new(0, 12, 0, 0) };
+    private readonly ComboBox _polling = new() { Width = 112, DisplayMemberPath = "Label", SelectedValuePath = "Value" };
+    private readonly ComboBox _lod = new() { Width = 112, DisplayMemberPath = "Label", SelectedValuePath = "Value" };
+    private readonly Button _refresh = new() { Width = 36, Height = 36, Padding = new(0), ToolTip = Text.Read,
+        Content = new TextBlock { Text = "\uE72C", FontFamily = new FontFamily("Segoe Fluent Icons"), FontSize = 16 } };
     private readonly StackPanel _fields = new();
     private CancellationTokenSource? _readLifetime;
     private HidDeviceProfile? _device;
@@ -28,10 +32,15 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
     private bool _refreshing;
     private readonly SemaphoreSlim _requests = new(1, 1);
     private int _saveGeneration;
+    private bool _preloading;
+    private readonly Dictionary<string, (MouseSettings Values, MouseSettingsCapabilities Limits)> _cache = new(StringComparer.Ordinal);
 
-    public DpiModule(IAppLogger logger) : this(logger, [new WlMouseSettingsDriver(logger), new WaizowlSettingsDriver(logger)]) { }
+    public DpiModule(IAppLogger logger) : this(logger, [() => new WlMouseSettingsDriver(logger), () => new WaizowlSettingsDriver(logger)]) { }
 
     internal DpiModule(IAppLogger logger, IMouseSettingsDriver[] drivers)
+        : this(logger, drivers.Select(driver => new Func<IMouseSettingsDriver>(() => driver)).ToArray()) { }
+
+    private DpiModule(IAppLogger logger, Func<IMouseSettingsDriver>[] drivers)
     {
         _logger = logger;
         _drivers = drivers;
@@ -40,7 +49,9 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
         title.SetResourceReference(FrameworkElement.StyleProperty, "GroupHeader");
         panel.Children.Add(title);
         panel.Children.Add(_deviceName);
-        _deviceName.Margin = new(0, 0, 0, 12);
+        _deviceName.Margin = new(4, 0, 0, 12);
+        Grid.SetIsSharedSizeScope(_fields, true);
+        AutomationProperties.SetName(_refresh, Text.Read);
         _dpi.SetResourceReference(FrameworkElement.StyleProperty, "NumberBox");
         _range.SetResourceReference(TextBlock.ForegroundProperty, "SecondaryText");
         var dpiLabel = new StackPanel();
@@ -49,16 +60,16 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
         _fields.Children.Add(Row(dpiLabel, _dpi, false));
         _fields.Children.Add(Row(new TextBlock { Text = Text.Polling }, _polling, false));
         _fields.Children.Add(Row(new TextBlock { Text = Text.Lod }, _lod, true));
-        var card = new Border { Child = _fields };
+        var card = new Border { Child = _fields, HorizontalAlignment = HorizontalAlignment.Left };
         card.SetResourceReference(FrameworkElement.StyleProperty, "Card");
         panel.Children.Add(card);
         _status.SetResourceReference(TextBlock.ForegroundProperty, "SecondaryText");
         panel.Children.Add(_status);
-        panel.Children.Add(_refresh);
         var scroll = new ScrollViewer { Content = panel };
         scroll.SetResourceReference(FrameworkElement.StyleProperty, "PageScroll");
         View = scroll;
         _dpi.TextChanged += (_, _) => Notify();
+        _dpi.PreviewMouseWheel += DpiMouseWheel;
         _polling.SelectionChanged += (_, _) => Notify();
         _lod.SelectionChanged += (_, _) => Notify();
         _refresh.Click += async (_, _) => await SetDeviceAsync(_device, CancellationToken.None);
@@ -68,6 +79,7 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
     public string Name => "g-eDPI";
     public string Version => typeof(DpiModule).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0] ?? "local";
     public FrameworkElement View { get; }
+    public FrameworkElement Actions => _refresh;
     public bool CanSave => !_disposed && !_busy && Requested() is MouseSettings requested && requested != _current;
     public event EventHandler? SaveAvailabilityChanged;
     public DeviceSettingsSummary? CurrentSettings { get; private set; }
@@ -82,11 +94,21 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
         CancellationToken cancellation = lifetime.Token;
         _device = device;
         _current = null;
-        PublishSettings(null);
-        _dpi.Clear();
-        _range.Text = string.Empty;
-        _polling.ItemsSource = _lod.ItemsSource = null;
-        _driver = device is null ? null : _drivers.FirstOrDefault(driver => driver.Supports(device));
+        _driver = device is null ? null : _drivers.Select(create => create()).FirstOrDefault(driver => driver.Supports(device));
+        if (device is not null && _driver is not null && _cache.TryGetValue(device.Id, out var cached))
+        {
+            _current = cached.Values;
+            ShowCapabilities(cached.Limits);
+            Show(cached.Values);
+            PublishSettings(cached.Values);
+        }
+        else
+        {
+            PublishSettings(null);
+            _dpi.Clear();
+            _range.Text = string.Empty;
+            _polling.ItemsSource = _lod.ItemsSource = null;
+        }
         _deviceName.Text = device?.DisplayName ?? string.Empty;
         SetBusy(true);
         _status.Text = _driver is null ? Text.Unsupported : Text.Loading;
@@ -97,6 +119,7 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
             MouseSettings settings = await Request(() => driver.ReadAsync(device, cancellation), cancellation);
             if (lifetime.IsCancellationRequested || _disposed) return;
             _current = settings;
+            _cache[device.Id] = (settings, driver.Capabilities);
             ShowCapabilities(driver.Capabilities);
             Show(settings);
             PublishSettings(settings);
@@ -107,6 +130,7 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
         {
             if (lifetime.IsCancellationRequested || _disposed) return;
             _logger.Error("g-eDPI: reading mouse settings failed", error);
+            _current = null;
             _status.Text = error.Message;
         }
         finally { if (ReferenceEquals(lifetime, _readLifetime) && !_disposed) SetBusy(false); }
@@ -126,6 +150,7 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
             MouseSettings saved = await Request(() => driver.SaveAsync(device, expected, requested, lifetime.Token), lifetime.Token);
             if (lifetime.IsCancellationRequested || _disposed) return false;
             _current = saved;
+            _cache[device.Id] = (saved, driver.Capabilities);
             Show(saved);
             PublishSettings(saved);
             _status.Text = Text.Hint;
@@ -138,6 +163,7 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
             if (!lifetime.IsCancellationRequested && !_disposed)
             {
                 _current = null;
+                _cache.Remove(device.Id);
                 PublishSettings(null);
                 _status.Text = error is ArgumentException ? Text.ChangedExternally : error.Message;
             }
@@ -166,6 +192,7 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
         {
             MouseSettings settings = await Request(() => driver.ReadAsync(device, lifetime.Token), lifetime.Token);
             if (_disposed || lifetime.IsCancellationRequested || generation != _saveGeneration) return;
+            _cache[device.Id] = (settings, driver.Capabilities);
             if (!_busy && _current is not null && Requested() == _current)
             {
                 _current = settings;
@@ -181,6 +208,46 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
             if (!_disposed && !lifetime.IsCancellationRequested) _logger.Warning($"g-eDPI: settings summary could not be refreshed: {error.Message}");
         }
         finally { _refreshing = false; }
+    }
+
+    public async Task PreloadSettingsAsync(IEnumerable<HidDeviceProfile> devices, CancellationToken token)
+    {
+        if (_disposed || _preloading || _readLifetime is null) return;
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token, _readLifetime.Token);
+        _preloading = true;
+        try
+        {
+            foreach (HidDeviceProfile device in devices)
+            {
+                if (_disposed || lifetime.IsCancellationRequested) return;
+                if (device.Id == _device?.Id || _cache.ContainsKey(device.Id)) continue;
+                IMouseSettingsDriver? driver = _drivers.Select(create => create()).FirstOrDefault(driver => driver.Supports(device));
+                if (driver is null) continue;
+                try
+                {
+                    MouseSettings settings = await Request(() => driver.ReadAsync(device, lifetime.Token), lifetime.Token);
+                    if (_disposed || lifetime.IsCancellationRequested) return;
+                    _cache[device.Id] = (settings, driver.Capabilities);
+                }
+                catch (Exception error) when (error is IOException or InvalidOperationException or UnauthorizedAccessException or NotSupportedException)
+                {
+                    _logger.Warning($"g-eDPI: settings preload failed for {device.Id}: {error.Message}");
+                }
+            }
+        }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+        finally { _preloading = false; }
+    }
+
+    private void DpiMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (!_dpi.IsEnabled || _busy || _driver is null || e.Delta == 0 || !int.TryParse(_dpi.Text, out int value)) return;
+        MouseSettingsCapabilities caps = _driver.Capabilities;
+        value = Math.Clamp(value, caps.MinimumDpi, caps.MaximumDpi);
+        int step = caps.DpiStep;
+        int next = e.Delta > 0 ? value / step * step + step : (value + step - 1) / step * step - step;
+        _dpi.Text = Math.Clamp(next, caps.MinimumDpi, caps.MaximumDpi).ToString(CultureInfo.CurrentCulture);
+        e.Handled = true;
     }
 
     private async Task<MouseSettings> Request(Func<Task<MouseSettings>> action, CancellationToken token)
@@ -225,9 +292,10 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
     private static Border Row(FrameworkElement label, FrameworkElement input, bool last)
     {
         var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition());
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto, SharedSizeGroup = "DpiLabels" });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto, SharedSizeGroup = "DpiValues" });
         label.VerticalAlignment = input.VerticalAlignment = VerticalAlignment.Center;
+        input.HorizontalAlignment = HorizontalAlignment.Left;
         label.Margin = new(0, 0, 16, 0);
         grid.Children.Add(label);
         Grid.SetColumn(input, 1);

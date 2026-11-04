@@ -56,7 +56,8 @@ public class DpiModuleTests
                 Assert.Contains(elements.OfType<Border>(), border => ReferenceEquals(border.Style, window.FindResource("Card")));
                 Assert.Same(window.FindResource("NumberBox"), Assert.Single(elements.OfType<TextBox>()).Style);
                 Assert.Equal(2, elements.OfType<ComboBox>().Count());
-                Assert.Single(elements.OfType<Button>());
+                Assert.Empty(elements.OfType<Button>());
+                Assert.IsType<Button>(module.Actions);
                 Assert.False(module.CanSave);
             }
             finally { window.Close(); }
