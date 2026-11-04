@@ -9,6 +9,28 @@ public class BatteryHistoryTests
     private static BatteryPoint[] Discharge(int from, int to, TimeSpan step, bool? charging = false) =>
         [.. Enumerable.Range(0, from - to + 1).Select(index => new BatteryPoint(Start + step * index, from - index, charging))];
 
+    [Theory]
+    [InlineData(60, 7 * 24 * 60)]
+    [InlineData(15, 24 * 60 * 4)]
+    public void ReadingHistoryKeepsTheWholeRequestedPeriod(int seconds, int samples)
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"gebar-history-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            DateTimeOffset first = DateTimeOffset.Now.AddSeconds(-(long)seconds * (samples - 1));
+            File.WriteAllLines(Path.Combine(directory, "test.log"), Enumerable.Range(0, samples).Select(index =>
+                $"{first.AddSeconds((long)seconds * index):O} [INF] Device state: name=Mouse, id=mouse, status=DeviceConnected, battery=50, charging=no"));
+
+            IReadOnlyList<BatteryPoint> points = BatteryHistory.Read("mouse", "Mouse", TimeSpan.FromDays(7), directory);
+
+            Assert.Equal(samples, points.Count);
+            Assert.Equal(first, points[0].Time);
+            Assert.Equal(first.AddSeconds((long)seconds * (samples - 1)), points[^1].Time);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
     [Fact]
     public void EstimatesFromSteadyDischarge()
     {

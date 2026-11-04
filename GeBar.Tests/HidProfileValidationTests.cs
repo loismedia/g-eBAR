@@ -15,6 +15,17 @@ public class HidProfileValidationTests
     [Fact]
     public void ValidProfilePasses() => Assert.Null(Device().Problem());
 
+    [Theory]
+    [InlineData("../settings")]
+    [InlineData("..\\settings")]
+    [InlineData("C:\\settings")]
+    [InlineData("mouse:stream")]
+    [InlineData(".")]
+    [InlineData("..")]
+    [InlineData("mouse.")]
+    [InlineData("mouse ")]
+    public void UnsafeFileNameIsRejected(string id) => Assert.NotNull((Device() with { Id = id }).Problem());
+
     [Fact]
     public void ExportFromNewerFormatIsRejected()
     {

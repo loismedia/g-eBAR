@@ -117,4 +117,14 @@ public class CompatibilityTests
         Assert.Equal("Renamed", saved.Devices[0].Label);
         Assert.Equal(second, saved.Devices[1]);
     }
+
+    [Fact]
+    public void AddingAProfileKeepsExistingDevices()
+    {
+        var first = new HidDeviceProfile("one", "One", 1, 2, null, null, [], new());
+        HidDeviceProfile second = first with { Id = "two", Name = "Two" };
+        var export = new HidProfileExport(2, DateTimeOffset.Now, [first]);
+
+        Assert.Equal([first, second], HidProfileCompatibility.UpdateExport(export, second).Devices);
+    }
 }

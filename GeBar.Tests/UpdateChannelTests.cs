@@ -198,4 +198,49 @@ public class UpdateChannelTests
         }
         finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
     }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task StableRollbackUsesOnlyModulesPublishedForThatVersionOrEarlier(bool stableModulesAvailable)
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"gebar-rollback-{Guid.NewGuid():N}");
+        string current = typeof(AppSettings).Assembly.GetName().Version!.ToString(3);
+        object ModuleRelease(string version, bool nightly, bool app, string? date) => new
+        {
+            tag_name = "v" + version, draft = false, prerelease = nightly,
+            body = date is null ? "App only" : $"g-eHID: {date}-hid-ABCDE\ng-eDPI: {date}-dpi-ABCDE",
+            assets = new[]
+            {
+                new { name = app ? "g-eBAR.exe" : "other.exe", url = "https://api.github.com/app" },
+                new { name = date is null ? "other.bin" : "g-eHID.exe", url = "https://api.github.com/hid" },
+                new { name = date is null ? "other.dll" : "g-eDPI.dll", url = "https://api.github.com/dpi" }
+            }
+        };
+        try
+        {
+            string json = JsonSerializer.Serialize(new[]
+            {
+                ModuleRelease(current, true, true, "05.11"),
+                ModuleRelease("99.0.0", false, false, "06.11"),
+                ModuleRelease("1.0.0", false, true, null),
+                ModuleRelease("0.9.0", false, false, stableModulesAvailable ? "01.11" : null)
+            });
+            using var client = new HttpClient(new Handler(_ => new(HttpStatusCode.OK) { Content = new StringContent(json) }));
+            using var service = new GitHubUpdateService(new FileLogger(directory, "test"), client, "", ReleaseChannel.Dev);
+
+            GitHubRelease? release = await service.CheckAsync(CancellationToken.None, allowStableRollback: true,
+                targetChannel: GitHubUpdateService.IsCurrentBuildNightly ? null : ReleaseChannel.Public);
+
+            Assert.NotNull(release);
+            Assert.True(release.IsDowngrade);
+            Assert.False(release.IsNightly);
+            Assert.Equal(new Version(1, 0, 0), release.Version);
+            Assert.Equal(stableModulesAvailable ? "01.11-hid-ABCDE" : null, release.HidVersion);
+            Assert.Equal(stableModulesAvailable ? "01.11-dpi-ABCDE" : null, release.DpiVersion);
+            Assert.Equal(stableModulesAvailable, release.HidUpdateAvailable);
+            Assert.Equal(stableModulesAvailable, release.DpiUpdateAvailable);
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
 }

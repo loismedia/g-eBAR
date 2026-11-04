@@ -141,6 +141,20 @@ public class DpiProtocolTests
         Assert.Single(second.Requests);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(5)]
+    public async Task FeatureReplyIsReadUsingTheRequestedReportId(byte reportId)
+    {
+        using var stream = new Replies(["050102"]);
+        byte[] request = [reportId, 1];
+
+        byte[]? response = await HidRequestExchange.SendThenReadFeatureAsync(stream, request, 65, 1, 0, CancellationToken.None);
+
+        Assert.NotNull(response);
+        Assert.Equal(reportId, Assert.Single(stream.ReadReportIds));
+    }
+
     private sealed class Device(string path) : HidDevice
     {
         public override int VendorID => 0xFFFF;
@@ -158,11 +172,13 @@ public class DpiProtocolTests
     {
         private readonly Queue<byte[]> _replies = new(replies.Select(hex => Convert.FromHexString(hex.PadRight(130, '0'))));
         public List<byte[]> Requests { get; } = [];
+        public List<byte> ReadReportIds { get; } = [];
         public override int ReadTimeout { get; set; } = 1000;
         public override int WriteTimeout { get; set; } = 1000;
         public override void SetFeature(byte[] buffer, int offset, int count) => Requests.Add(buffer.AsSpan(offset, count).ToArray());
         public override void GetFeature(byte[] buffer, int offset, int count)
         {
+            ReadReportIds.Add(buffer[offset]);
             if (_replies.TryDequeue(out byte[]? reply)) reply.AsSpan(0, count).CopyTo(buffer.AsSpan(offset, count));
             else buffer.AsSpan(offset, count).Clear();
         }
