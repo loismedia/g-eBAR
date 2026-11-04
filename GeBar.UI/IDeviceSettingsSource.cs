@@ -1,4 +1,5 @@
 using System.Globalization;
+using GeBar.Core;
 
 namespace GeBar.UI;
 
@@ -12,4 +13,5 @@ public interface IDeviceSettingsSource
     DeviceSettingsSummary? CurrentSettings { get; }
     event EventHandler? SettingsChanged;
     Task RefreshSettingsAsync(CancellationToken token);
+    Task PreloadSettingsAsync(IEnumerable<HidDeviceProfile> devices, CancellationToken token) => Task.CompletedTask;
 }
