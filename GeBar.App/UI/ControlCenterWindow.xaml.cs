@@ -84,6 +84,8 @@ internal partial class ControlCenterWindow : Window
     {
         if (_suppressDeviceChange || DeviceCombo.SelectedIndex < 0 || DeviceCombo.SelectedIndex >= _deviceOptions.Length) return;
         Value = Value with { SelectedDeviceId = _deviceOptions[DeviceCombo.SelectedIndex].Id };
+        RefreshModuleDevice();
+        UpdateDeviceNames();
         if (SettingsSaved is { } save) await save(Value);
     }
 
@@ -258,6 +260,7 @@ internal partial class ControlCenterWindow : Window
         AppearancePage.Visibility = page == AppearancePage ? Visibility.Visible : Visibility.Collapsed;
         AboutPage.Visibility = page == AboutPage ? Visibility.Visible : Visibility.Collapsed;
         DpiPage.Visibility = page == DpiPage ? Visibility.Visible : Visibility.Collapsed;
+        ModuleActions.Visibility = page == DpiPage && ModuleActions.Content is not null ? Visibility.Visible : Visibility.Collapsed;
         SaveButton.Visibility = page == SettingsPage || page == AppearancePage || page == DpiPage ? Visibility.Visible : Visibility.Collapsed;
         SaveButton.IsEnabled = page != DpiPage || _moduleLoader.Module?.CanSave == true;
         StyleTabs(tab);
@@ -315,6 +318,8 @@ internal partial class ControlCenterWindow : Window
         if (device == _moduleDevice && _moduleDevice is not null) return;
         _moduleDevice = device;
         await module.SetDeviceAsync(device, _moduleLifetime.Token);
+        if (!_moduleLifetime.IsCancellationRequested && module is IDeviceSettingsSource source)
+            await source.PreloadSettingsAsync(_deviceOptions.Select(option => _resolveDevice?.Invoke(option.Id)).OfType<HidDeviceProfile>(), _moduleLifetime.Token);
     }
 
     private async void RefreshDeviceSettings()
@@ -375,12 +380,14 @@ internal partial class ControlCenterWindow : Window
         if (_moduleLoader.Module?.Version != dpiVersion)
         {
             DpiPage.Content = null;
+            ModuleActions.Content = null;
             _moduleLoader.Dispose();
             _moduleDevice = null;
             _moduleLoader.Load(GitHubUpdateService.DpiModulePath, _logger);
             if (_moduleLoader.Module is ISettingsModule module)
             {
                 DpiPage.Content = module.View;
+                ModuleActions.Content = module.Actions;
                 module.SaveAvailabilityChanged += (_, _) =>
                 {
                     if (DpiPage.Visibility == Visibility.Visible) SaveButton.IsEnabled = module.CanSave;
@@ -388,6 +395,7 @@ internal partial class ControlCenterWindow : Window
                 if (module is IDeviceSettingsSource source) source.SettingsChanged += (_, _) => UpdateDeviceNames();
             }
             DpiTab.Visibility = _moduleLoader.Module is null ? Visibility.Collapsed : Visibility.Visible;
+            ModuleActions.Visibility = DpiPage.Visibility == Visibility.Visible && ModuleActions.Content is not null ? Visibility.Visible : Visibility.Collapsed;
             if (DpiPage.Visibility == Visibility.Visible)
             {
                 if (_moduleLoader.Module is null) ShowPage(HomePage, HomeTab);

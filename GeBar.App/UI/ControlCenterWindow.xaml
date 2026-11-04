@@ -282,8 +282,11 @@
             </Grid>
         </Grid>
 
-        <Button x:Name="SaveButton" Grid.Row="2" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Right" MinWidth="130" Margin="0,16,10,0" Click="SaveClick" RenderTransformOrigin="0.5,0.5">
-            <Button.RenderTransform><ScaleTransform x:Name="SaveButtonScale"/></Button.RenderTransform>
-        </Button>
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,10,0" Visibility="{Binding Visibility, ElementName=SaveButton}">
+            <ContentControl x:Name="ModuleActions" Visibility="Collapsed" VerticalAlignment="Center" Margin="0,0,8,0"/>
+            <Button x:Name="SaveButton" Style="{StaticResource PrimaryButton}" MinWidth="130" Click="SaveClick" RenderTransformOrigin="0.5,0.5">
+                <Button.RenderTransform><ScaleTransform x:Name="SaveButtonScale"/></Button.RenderTransform>
+            </Button>
+        </StackPanel>
     </Grid>
 </Window>
