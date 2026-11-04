@@ -17,6 +17,7 @@
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
   <ItemGroup><AssemblyMetadata Include="Publisher" Value="Lois Media" /><AssemblyMetadata Include="Developer" Value="lucz" /></ItemGroup>
+  <ItemGroup><InternalsVisibleTo Include="GeBar.Tests" /></ItemGroup>
   <ItemGroup Condition="'$(RepositoryUrl)' != ''"><AssemblyMetadata Include="RepositoryUrl" Value="$(RepositoryUrl)" /></ItemGroup>
   <ItemGroup><EmbeddedResource Include="..\GeBar.App\Assets\built-in.json" LogicalName="GeBar.HidApp.built-in.json" /></ItemGroup>
   <ItemGroup>

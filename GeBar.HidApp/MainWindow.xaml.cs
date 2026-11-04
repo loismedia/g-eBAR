@@ -36,21 +36,21 @@ internal partial class MainWindow : Window
     private CancellationTokenSource? _sweep;
     private CancellationTokenSource? _sleepWatch;
     private bool _updatingLabel;
+    private bool _selectingCaptureInterface;
     private readonly ObservableCollection<DeviceItem> _devices = [];
-    private readonly Dictionary<string, HidProfileExport> _profileDocuments = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (string Path, HidProfileExport Export)> _profileDocuments = new(StringComparer.OrdinalIgnoreCase);
     private const int MaximumPacketChars = 400_000;
     private const int LoggedPacketsPerCapture = 200;
     private const int ExportedPackets = 300;
     private readonly FileLogger _logger;
 
-    private static string ProfilesDirectory => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "g-eBAR",
-        "Profiles");
+    private readonly string ProfilesDirectory;
 
-    public MainWindow(FileLogger logger)
+    public MainWindow(FileLogger logger, string? profilesDirectory = null)
     {
         _logger = logger;
+        ProfilesDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(profilesDirectory ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "g-eBAR", "Profiles")));
         InitializeComponent();
         ExtendedModeCheck.Visibility = BuildChannel.Current == ReleaseChannel.Dev ? Visibility.Visible : Visibility.Collapsed;
         AppTheme.Apply(Resources);
@@ -209,13 +209,14 @@ internal partial class MainWindow : Window
             if (!await TryWriteProfileAsync(GetProfilePath(primary.Profile), primary.Profile)) return;
             primary.MarkSaved();
         }
-        string secondaryPath = GetProfilePath(secondary.Profile);
-        if (secondary.IsAdded && !secondaryPath.Equals(GetProfilePath(primary.Profile), StringComparison.OrdinalIgnoreCase) && File.Exists(secondaryPath))
+        if (secondary.IsAdded && !secondary.Profile.Id.Equals(primary.Profile.Id, StringComparison.OrdinalIgnoreCase))
         {
-            try { File.Delete(secondaryPath); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            try { await RemoveProfileAsync(secondary.Profile); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or NotSupportedException or ArgumentException)
             {
-                _logger.Warning($"Merged profile saved, but {Path.GetFileName(secondaryPath)} could not be removed: {ex.Message}");
+                StatusText.Text = Strings.ProfileWriteFailed;
+                _logger.Warning($"Merged profile saved, but {secondary.Profile.Id} could not be removed: {ex.Message}");
+                return;
             }
         }
         primary.IsAdded = persistMergedProfile;
@@ -229,16 +230,17 @@ internal partial class MainWindow : Window
     private async void InterfaceSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         _selectedInterface = InterfacesList.SelectedItem as InterfaceItem;
-        _lastCapturedPacket = null;
-        _capturedInterfacePath = null;
         CaptureButton.IsEnabled = _selectedInterface is not null && _selectedInterface.Profile.InputReportLength > 0;
         UpdateBatteryRequestAvailability();
+        if (_selectingCaptureInterface) return;
+        _lastCapturedPacket = null;
+        _capturedInterfacePath = null;
         await StopCaptureAsync();
     }
 
     private async void CaptureClick(object sender, RoutedEventArgs e)
     {
-        if (_capture is not null) { await StopCaptureAsync(); return; }
+        if (_capture is not null || _listeners.Count > 0) { await StopCaptureAsync(); return; }
         if (_selectedInterface is null) return;
         try
         {
@@ -443,7 +445,7 @@ internal partial class MainWindow : Window
                 await listener.StartAsync();
                 _listeners.Add(listener);
                 _logger.Info($"Listening: IN={item.Profile.InputReportLength} path={item.Profile.DevicePath}");
-                if (first is null) { first = item; InterfacesList.SelectedItem = item; }
+                if (first is null) { first = item; SelectCaptureInterface(item); }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
             {
@@ -455,6 +457,16 @@ internal partial class MainWindow : Window
         CaptureButton.Content = Strings.StopCapture;
         CaptureStatusText.Text = Strings.Capturing;
         return first;
+    }
+
+    private void SelectCaptureInterface(InterfaceItem item)
+    {
+        InterfaceItem? listed = InterfacesList.Items.OfType<InterfaceItem>()
+            .FirstOrDefault(candidate => candidate.Profile.DevicePath.Equals(item.Profile.DevicePath, StringComparison.OrdinalIgnoreCase));
+        if (listed is null) return;
+        _selectingCaptureInterface = true;
+        try { InterfacesList.SelectedItem = listed; }
+        finally { _selectingCaptureInterface = false; }
     }
 
     private void ClearPacketsClick(object sender, RoutedEventArgs e) => PacketsText.Clear();
@@ -696,10 +708,10 @@ internal partial class MainWindow : Window
             return;
         }
 
-        if (_selectedDevice.IsAdded && File.Exists(path))
+        if (_selectedDevice.IsAdded)
         {
-            try { File.Delete(path); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            try { await RemoveProfileAsync(_selectedDevice.Profile); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or NotSupportedException or ArgumentException)
             {
                 StatusText.Text = Strings.ProfileWriteFailed;
                 _logger.Error($"Profile could not be removed: {path}", ex);
@@ -738,7 +750,15 @@ internal partial class MainWindow : Window
         if (_selectedDevice is { IsBuiltIn: true } builtIn) SendToAppButton.IsEnabled = builtIn.HasPendingChanges;
     }
 
-    private static string GetProfilePath(HidDeviceProfile profile) => Path.Combine(ProfilesDirectory, $"{profile.Id}.json");
+    private string GetProfilePath(HidDeviceProfile profile)
+    {
+        if (profile.Problem() is string problem) throw new InvalidDataException(problem);
+        string path = Path.GetFullPath(_profileDocuments.TryGetValue(profile.Id, out var document)
+            ? document.Path : Path.Combine(ProfilesDirectory, $"{profile.Id}.json"));
+        if (!string.Equals(Path.GetDirectoryName(path), ProfilesDirectory, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Profile path escapes the profiles directory.");
+        return path;
+    }
 
     private static HidDeviceProfile[] LoadBuiltInProfiles()
     {
@@ -765,8 +785,9 @@ internal partial class MainWindow : Window
                 if (export.Problem() is not null) continue;
                 foreach (HidDeviceProfile profile in export!.Devices.Where(profile => profile.Problem() is null))
                 {
+                    if (_profileDocuments.ContainsKey(profile.Id)) continue;
                     profiles.Add(profile);
-                    _profileDocuments[profile.Id] = export;
+                    _profileDocuments[profile.Id] = (file, export);
                 }
             }
             catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException or NotSupportedException) { }
@@ -791,7 +812,8 @@ internal partial class MainWindow : Window
         HidExportDiagnostics? diagnostics = !includeDiagnostics || (_probeTrace.Count == 0 && _packetTrace.Count == 0)
             ? null
             : new HidExportDiagnostics(CurrentVersion(), WindowsRelease.Describe(), [.. _probeTrace], [.. _packetTrace]);
-        HidProfileExport? previous = _profileDocuments.GetValueOrDefault(profile.Id);
+        if (profile.Problem() is string invalid) throw new InvalidDataException(invalid);
+        HidProfileExport? previous = _profileDocuments.TryGetValue(profile.Id, out var document) ? document.Export : null;
         if (File.Exists(path))
         {
             HidProfileExport? destination = JsonSerializer.Deserialize<HidProfileExport>(await File.ReadAllTextAsync(path), JsonOptions);
@@ -799,6 +821,40 @@ internal partial class MainWindow : Window
             previous = destination;
         }
         HidProfileExport export = HidProfileCompatibility.UpdateExport(previous, profile, diagnostics);
+        await WriteDocumentAsync(path, export);
+        RememberDocument(path, export);
+    }
+
+    private async Task RemoveProfileAsync(HidDeviceProfile profile)
+    {
+        string path = GetProfilePath(profile);
+        if (File.Exists(path))
+        {
+            HidProfileExport? previous = JsonSerializer.Deserialize<HidProfileExport>(await File.ReadAllTextAsync(path), JsonOptions);
+            if (previous.Problem() is string problem) throw new InvalidDataException(problem);
+            HidProfileExport export = previous! with
+            {
+                Devices = [.. previous!.Devices.Where(device => !device.Id.Equals(profile.Id, StringComparison.OrdinalIgnoreCase))]
+            };
+            if (export.Devices.Count == 0) File.Delete(path);
+            else
+            {
+                await WriteDocumentAsync(path, export);
+                RememberDocument(path, export);
+            }
+        }
+        _profileDocuments.Remove(profile.Id);
+    }
+
+    private void RememberDocument(string path, HidProfileExport export)
+    {
+        path = Path.GetFullPath(path);
+        if (!string.Equals(Path.GetDirectoryName(path), ProfilesDirectory, StringComparison.OrdinalIgnoreCase)) return;
+        foreach (HidDeviceProfile saved in export.Devices) _profileDocuments[saved.Id] = (path, export);
+    }
+
+    private static async Task WriteDocumentAsync(string path, HidProfileExport export)
+    {
         string json = JsonSerializer.Serialize(export, JsonOptions);
 
         string temporary = path + ".tmp";
@@ -808,7 +864,6 @@ internal partial class MainWindow : Window
             if (JsonSerializer.Deserialize<HidProfileExport>(await File.ReadAllTextAsync(temporary)).Problem() is string broken)
                 throw new InvalidDataException($"written profile did not read back: {broken}");
             File.Move(temporary, path, true);
-            foreach (HidDeviceProfile saved in export.Devices) _profileDocuments[saved.Id] = export;
         }
         catch
         {
