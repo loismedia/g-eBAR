@@ -202,7 +202,12 @@ internal sealed partial class GitHubUpdateService : IDisposable
             }
             Uri? downloadUri = AssetUri(asset);
             if (appUpdateAvailable && downloadUri is null) return null;
-            JsonElement? hidRelease = releases.Cast<JsonElement?>().FirstOrDefault(item =>
+            IEnumerable<JsonElement> moduleReleases = releases;
+            if (isDowngrade && !isNightly)
+                moduleReleases = releases.Where(item => !item.GetProperty("prerelease").GetBoolean()
+                    && Version.TryParse(item.GetProperty("tag_name").GetString()?.TrimStart('v', 'V'), out Version? moduleVersion) && moduleVersion <= version)
+                    .OrderByDescending(item => Version.Parse(item.GetProperty("tag_name").GetString()!.TrimStart('v', 'V')));
+            JsonElement? hidRelease = moduleReleases.Cast<JsonElement?>().FirstOrDefault(item =>
             {
                 return item?.GetProperty("assets").EnumerateArray().Any(asset => string.Equals(asset.GetProperty("name").GetString(), "g-eHID.exe", StringComparison.OrdinalIgnoreCase)) == true;
             });
@@ -216,7 +221,7 @@ internal sealed partial class GitHubUpdateService : IDisposable
                 && (switching || !string.Equals(GetInstalledHidVersion(), hidVersion, StringComparison.OrdinalIgnoreCase));
             if (switching && GetInstalledHidVersion() is not null && !hidUpdateAvailable)
                 throw new InvalidOperationException("The target channel has no compatible g-eHID module.");
-            JsonElement? dpiRelease = releases.Cast<JsonElement?>().FirstOrDefault(item => item?.GetProperty("assets").EnumerateArray()
+            JsonElement? dpiRelease = moduleReleases.Cast<JsonElement?>().FirstOrDefault(item => item?.GetProperty("assets").EnumerateArray()
                 .Any(asset => string.Equals(asset.GetProperty("name").GetString(), "g-eDPI.dll", StringComparison.OrdinalIgnoreCase)) == true);
             JsonElement? dpiAsset = dpiRelease?.GetProperty("assets").EnumerateArray()
                 .Where(item => string.Equals(item.GetProperty("name").GetString(), "g-eDPI.dll", StringComparison.OrdinalIgnoreCase)).Cast<JsonElement?>().FirstOrDefault();

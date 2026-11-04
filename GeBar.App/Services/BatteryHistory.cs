@@ -7,19 +7,18 @@ internal readonly record struct BatteryPoint(DateTimeOffset Time, int Percentage
 
 internal static partial class BatteryHistory
 {
-    private const int MaximumPoints = 5000;
     private const int MinimumDrop = 3;
     private const int ShutdownReserve = 3;
     private const int ChargeRise = 5;
     private static readonly TimeSpan MaximumGap = TimeSpan.FromMinutes(30);
     private static readonly TimeSpan MaximumSpan = TimeSpan.FromHours(24);
 
-    public static IReadOnlyList<BatteryPoint> Read(string deviceId, string deviceName, TimeSpan window)
+    public static IReadOnlyList<BatteryPoint> Read(string deviceId, string deviceName, TimeSpan window, string? directory = null)
     {
         if (string.IsNullOrWhiteSpace(deviceId) && string.IsNullOrWhiteSpace(deviceName)) return [];
         DateTimeOffset since = DateTimeOffset.Now - window;
         var points = new List<BatteryPoint>();
-        foreach (string file in Files(since))
+        foreach (string file in Files(since, directory ?? AppPaths.Logs))
         {
             try
             {
@@ -41,7 +40,7 @@ internal static partial class BatteryHistory
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
         points.Sort((left, right) => left.Time.CompareTo(right.Time));
-        return points.Count <= MaximumPoints ? points : points[^MaximumPoints..];
+        return points;
     }
 
     public static IReadOnlyList<BatteryPoint> Analysed(IReadOnlyList<BatteryPoint> points)
@@ -92,10 +91,10 @@ internal static partial class BatteryHistory
         return remaining is > 0 and < 720 ? TimeSpan.FromHours(remaining) : null;
     }
 
-    private static IEnumerable<string> Files(DateTimeOffset since)
+    private static IEnumerable<string> Files(DateTimeOffset since, string directory)
     {
-        if (!System.IO.Directory.Exists(AppPaths.Logs)) return [];
-        return System.IO.Directory.GetFiles(AppPaths.Logs, "*.log")
+        if (!System.IO.Directory.Exists(directory)) return [];
+        return System.IO.Directory.GetFiles(directory, "*.log")
             .Select(path => (Path: path, Written: File.GetLastWriteTimeUtc(path)))
             .Where(item => item.Written >= since.UtcDateTime.Date)
             .OrderBy(item => item.Written)
