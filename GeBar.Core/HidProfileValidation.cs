@@ -21,6 +21,8 @@ public static class HidProfileValidation
     {
         if (profile is null) return "device entry is empty";
         if (string.IsNullOrWhiteSpace(profile.Id)) return "device has no id";
+        if (profile.Id is "." or ".." || profile.Id.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
+            || profile.Id.EndsWith('.') || profile.Id.EndsWith(' ')) return "device id is not a safe file name";
         if (string.IsNullOrWhiteSpace(profile.Name)) return $"device {profile.Id} has no name";
         if (profile.Connections is { Count: > MaximumConnections }) return $"device {profile.Id} lists more than {MaximumConnections} connections";
 

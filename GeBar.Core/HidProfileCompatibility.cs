@@ -15,7 +15,7 @@ public static class HidProfileCompatibility
             ExportedAt = DateTimeOffset.Now,
             Devices = export.Devices.Any(device => device.Id == profile.Id)
                 ? [.. export.Devices.Select(device => device.Id == profile.Id ? profile : device)]
-                : [profile],
+                : [.. export.Devices, profile],
             Diagnostics = diagnostics ?? export.Diagnostics
         };
     }
