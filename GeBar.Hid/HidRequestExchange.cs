@@ -33,6 +33,7 @@ public static class HidRequestExchange
             if (delayMs > 0) await Task.Delay(delayMs, token).ConfigureAwait(false);
 
             var response = new byte[reportLength];
+            response[0] = buffer[0];
             try { stream.GetFeature(response); }
             catch (Exception ex) when (ex is IOException or TimeoutException or UnauthorizedAccessException) { continue; }
             if (accept is null || accept(response)) return response;

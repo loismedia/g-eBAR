@@ -17,11 +17,10 @@ public static class SleepWatch
     private static readonly TimeSpan Wake = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan Tick = TimeSpan.FromSeconds(1);
 
-    private readonly record struct Seen(DateTimeOffset Time, string Path, byte ReportId, byte[] Payload);
-
     public static async Task<SleepWatchResult?> RunAsync(HidDeviceProfile device, TimeSpan sleepAfter, IProgress<SleepWatchProgress>? progress, CancellationToken token)
     {
-        var seen = new List<Seen>();
+        var capture = new Capture();
+        DateTimeOffset asleep = DateTimeOffset.MaxValue, woke = DateTimeOffset.MaxValue;
         var sessions = new List<HidCaptureSession>();
         foreach (string path in StatusPaths(device))
         {
@@ -29,9 +28,11 @@ public static class SleepWatch
             var session = new HidCaptureSession(path);
             session.PacketReceived += packet =>
             {
-                ReadOnlySpan<byte> span = packet.Span;
-                if (span.Length <= 1) return;
-                lock (seen) seen.Add(new Seen(DateTimeOffset.Now, captured, span[0], span[1..].ToArray()));
+                lock (capture)
+                {
+                    DateTimeOffset now = DateTimeOffset.Now;
+                    capture.Add(captured, packet.Span, now < asleep ? SleepWatchPhase.Idle : now < woke ? SleepWatchPhase.Sleeping : SleepWatchPhase.Waking);
+                }
             };
             try
             {
@@ -45,82 +46,87 @@ public static class SleepWatch
         }
         if (sessions.Count == 0) return null;
 
-        DateTimeOffset asleep = DateTimeOffset.Now + sleepAfter;
-        DateTimeOffset woke = asleep + Confirm;
+        lock (capture)
+        {
+            asleep = DateTimeOffset.Now + sleepAfter;
+            woke = asleep + Confirm;
+        }
         try
         {
-            await PhaseAsync(SleepWatchPhase.Idle, asleep, seen, progress, token).ConfigureAwait(false);
-            await PhaseAsync(SleepWatchPhase.Sleeping, woke, seen, progress, token).ConfigureAwait(false);
-            await PhaseAsync(SleepWatchPhase.Waking, woke + Wake, seen, progress, token).ConfigureAwait(false);
+            await PhaseAsync(SleepWatchPhase.Idle, asleep, capture, progress, token).ConfigureAwait(false);
+            await PhaseAsync(SleepWatchPhase.Sleeping, woke, capture, progress, token).ConfigureAwait(false);
+            await PhaseAsync(SleepWatchPhase.Waking, woke + Wake, capture, progress, token).ConfigureAwait(false);
         }
         finally
         {
             foreach (HidCaptureSession session in sessions) await session.DisposeAsync().ConfigureAwait(false);
         }
 
-        lock (seen) return Analyse([.. seen], asleep, woke, sessions.Count);
+        lock (capture) return capture.Analyse(sessions.Count);
     }
 
-    private static async Task PhaseAsync(SleepWatchPhase phase, DateTimeOffset until, List<Seen> seen, IProgress<SleepWatchProgress>? progress, CancellationToken token)
+    private static async Task PhaseAsync(SleepWatchPhase phase, DateTimeOffset until, Capture capture, IProgress<SleepWatchProgress>? progress, CancellationToken token)
     {
         while (DateTimeOffset.Now < until)
         {
             int count;
-            lock (seen) count = seen.Count;
+            lock (capture) count = capture.Packets;
             progress?.Report(new SleepWatchProgress(phase, (int)Math.Ceiling((until - DateTimeOffset.Now).TotalSeconds), count));
             await Task.Delay(Tick, token).ConfigureAwait(false);
         }
     }
 
-    private static SleepWatchResult Analyse(IReadOnlyList<Seen> seen, DateTimeOffset asleep, DateTimeOffset woke, int interfaces)
+    internal sealed class Capture
     {
-        Dictionary<(string Path, byte ReportId), int> awakeStable = Stable(seen.Where(item => item.Time < asleep));
-        Dictionary<(string Path, byte ReportId), int> sleepStable = Stable(seen.Where(item => item.Time >= asleep && item.Time < woke));
-        Dictionary<(string Path, byte ReportId), int> stable = awakeStable.Keys.Concat(sleepStable.Keys).Distinct()
-            .ToDictionary(key => key, key => Math.Min(awakeStable.GetValueOrDefault(key, PrefixBytes), sleepStable.GetValueOrDefault(key, PrefixBytes)));
+        private readonly Dictionary<(string Path, byte ReportId), byte[]> _awake = [];
+        private readonly Dictionary<(string Path, byte ReportId), byte[]> _sleeping = [];
+        private Dictionary<(string Path, byte ReportId), int>? _stable;
+        private HashSet<(string Path, string Prefix)>? _candidates;
+        public int Packets { get; private set; }
 
-        HashSet<string> awake = [.. Prefixes(seen.Where(item => item.Time < asleep), stable)];
-        HashSet<string> after = [.. Prefixes(seen.Where(item => item.Time >= woke), stable)];
-        (string Path, string Prefix)[] candidates = [.. seen
-            .Where(item => item.Time >= asleep && item.Time < woke)
-            .Select(item => (item.Path, Prefix: Prefix(item, stable)))
-            .Where(item => item.Prefix is not null && !awake.Contains(Key(item.Path, item.Prefix!)) && !after.Contains(Key(item.Path, item.Prefix!)))
-            .Select(item => (item.Path, Prefix: item.Prefix!))
-            .Distinct()];
-
-        string[] listed = [.. candidates.Select(item => item.Prefix).Distinct()];
-        return candidates.Length == 1
-            ? new SleepWatchResult(candidates[0].Path, candidates[0].Prefix, listed, seen.Count, interfaces)
-            : new SleepWatchResult(string.Empty, null, listed, seen.Count, interfaces);
-    }
-
-    private static Dictionary<(string Path, byte ReportId), int> Stable(IEnumerable<Seen> packets) =>
-        packets.GroupBy(item => (item.Path, item.ReportId)).ToDictionary(group => group.Key, StableBytes);
-
-    private static int StableBytes(IEnumerable<Seen> group)
-    {
-        byte[]? first = null;
-        int stable = PrefixBytes;
-        foreach (Seen item in group)
+        public void Add(string path, ReadOnlySpan<byte> packet, SleepWatchPhase phase)
         {
-            if (first is null) { first = item.Payload; stable = Math.Min(PrefixBytes, first.Length); continue; }
-            stable = Math.Min(stable, item.Payload.Length);
-            for (int index = 0; index < stable; index++)
-                if (first[index] != item.Payload[index]) { stable = index; break; }
+            if (packet.Length <= 1) return;
+            Packets++;
+            var key = (path, packet[0]);
+            ReadOnlySpan<byte> payload = packet.Slice(1, Math.Min(PrefixBytes, packet.Length - 1));
+            if (phase == SleepWatchPhase.Waking)
+            {
+                FindCandidates();
+                int length = Math.Min(_stable!.GetValueOrDefault(key, PrefixBytes), payload.Length);
+                if (length >= MinimumPrefixBytes) _candidates!.Remove((path, Convert.ToHexString(payload[..length])));
+                return;
+            }
+            Dictionary<(string Path, byte ReportId), byte[]> prefixes = phase == SleepWatchPhase.Idle ? _awake : _sleeping;
+            if (!prefixes.TryGetValue(key, out byte[]? previous)) { prefixes[key] = payload.ToArray(); return; }
+            int common = 0;
+            while (common < previous.Length && common < payload.Length && previous[common] == payload[common]) common++;
+            if (common < previous.Length) prefixes[key] = previous[..common];
         }
-        return first is null ? 0 : stable;
+
+        private void FindCandidates()
+        {
+            if (_candidates is not null) return;
+            _stable = _awake.Keys.Concat(_sleeping.Keys).Distinct().ToDictionary(key => key,
+                key => Math.Min(_awake.GetValueOrDefault(key)?.Length ?? PrefixBytes, _sleeping.GetValueOrDefault(key)?.Length ?? PrefixBytes));
+            var awake = new HashSet<(string Path, string Prefix)>();
+            foreach (var (key, payload) in _awake)
+                if (_stable[key] >= MinimumPrefixBytes) awake.Add((key.Path, Convert.ToHexString(payload.AsSpan(0, _stable[key]))));
+            _candidates = [];
+            foreach (var (key, payload) in _sleeping)
+                if (_stable[key] >= MinimumPrefixBytes) _candidates.Add((key.Path, Convert.ToHexString(payload.AsSpan(0, _stable[key]))));
+            _candidates.ExceptWith(awake);
+        }
+
+        public SleepWatchResult Analyse(int interfaces)
+        {
+            FindCandidates();
+            string[] listed = [.. _candidates!.Select(item => item.Prefix).Distinct()];
+            return _candidates!.Count == 1
+                ? new SleepWatchResult(_candidates.First().Path, _candidates.First().Prefix, listed, Packets, interfaces)
+                : new SleepWatchResult(string.Empty, null, listed, Packets, interfaces);
+        }
     }
-
-    private static IEnumerable<string> Prefixes(IEnumerable<Seen> packets, Dictionary<(string Path, byte ReportId), int> stable) =>
-        packets.Select(item => (item.Path, Prefix: Prefix(item, stable))).Where(item => item.Prefix is not null).Select(item => Key(item.Path, item.Prefix!));
-
-    private static string? Prefix(Seen packet, Dictionary<(string Path, byte ReportId), int> stable)
-    {
-        int length = Math.Min(stable.GetValueOrDefault((packet.Path, packet.ReportId), PrefixBytes), packet.Payload.Length);
-        return length < MinimumPrefixBytes ? null : Convert.ToHexString(packet.Payload.AsSpan(0, length));
-    }
-
-    private static string Key(string path, string prefix) => $"{path}|{prefix}";
 
     private static IEnumerable<string> StatusPaths(HidDeviceProfile device)
     {
