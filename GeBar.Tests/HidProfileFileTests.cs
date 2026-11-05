@@ -11,7 +11,20 @@ namespace GeBar.Tests;
 
 public class HidProfileFileTests
 {
+    private delegate void AppendPacket(string direction, ReadOnlySpan<byte> packet);
     private static HidDeviceProfile Device(string id) => new(id, id, 1, 2, null, null, [], new());
+
+    [Fact]
+    public void PacketDisplayKeepsUppercaseHexAndSpaces() => WithWindow((window, _) =>
+    {
+        var append = typeof(MainWindow).GetMethod("AppendPacket", BindingFlags.Instance | BindingFlags.NonPublic)!.CreateDelegate<AppendPacket>(window);
+        append("RX", [0, 0x0A, 0xFF]);
+        append("RX", []);
+
+        string text = ((TextBox)window.FindName("PacketsText")).Text;
+        Assert.Contains("RX [3] 00 0A FF" + Environment.NewLine, text);
+        Assert.Contains("RX [0] " + Environment.NewLine, text);
+    });
 
     [Fact]
     public void RenamedDocumentUpdatesAndRemovesOnlyTheSelectedDevice() => WithWindow((window, directory) =>

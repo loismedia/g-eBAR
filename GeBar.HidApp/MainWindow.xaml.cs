@@ -25,11 +25,9 @@ internal partial class MainWindow : Window
     private InterfaceItem? _selectedInterface;
     private HidCaptureSession? _capture;
     private readonly List<HidCaptureSession> _listeners = [];
-    private byte[]? _lastCapturedPacket;
     private int _loggedPackets;
     private readonly List<string> _probeTrace = [];
     private readonly List<string> _packetTrace = [];
-    private string? _capturedInterfacePath;
     private byte[]? _chargingBaseline;
     private int[]? _chargingCandidates;
     private bool _extendedMode;
@@ -233,8 +231,6 @@ internal partial class MainWindow : Window
         CaptureButton.IsEnabled = _selectedInterface is not null && _selectedInterface.Profile.InputReportLength > 0;
         UpdateBatteryRequestAvailability();
         if (_selectingCaptureInterface) return;
-        _lastCapturedPacket = null;
-        _capturedInterfacePath = null;
         await StopCaptureAsync();
     }
 
@@ -425,7 +421,6 @@ internal partial class MainWindow : Window
         capture.CaptureFailed += CaptureFailed;
         await capture.StartAsync();
         _capture = capture;
-        _capturedInterfacePath = item.Profile.DevicePath;
         CaptureButton.Content = Strings.StopCapture;
         CaptureStatusText.Text = Strings.Capturing;
     }
@@ -453,7 +448,6 @@ internal partial class MainWindow : Window
             }
         }
         if (first is null) return null;
-        _capturedInterfacePath = first.Profile.DevicePath;
         CaptureButton.Content = Strings.StopCapture;
         CaptureStatusText.Text = Strings.Capturing;
         return first;
@@ -482,11 +476,7 @@ internal partial class MainWindow : Window
     private void PacketReceived(ReadOnlyMemory<byte> packet, InterfaceItem? source)
     {
         if (Dispatcher.HasShutdownStarted) return;
-        Dispatcher.BeginInvoke(() =>
-        {
-            _lastCapturedPacket = packet.ToArray();
-            AppendPacket(source is null ? "RX" : $"RX {source.Index}", packet.Span);
-        });
+        Dispatcher.BeginInvoke(() => AppendPacket(source is null ? "RX" : $"RX {source.Index}", packet.Span));
     }
 
     private void CollectPacket(string line)
@@ -607,7 +597,7 @@ internal partial class MainWindow : Window
 
     private void AppendPacket(string direction, ReadOnlySpan<byte> packet)
     {
-        string hex = string.Join(' ', Convert.ToHexString(packet).Chunk(2).Select(pair => new string(pair)));
+        string hex = BitConverter.ToString(packet.ToArray()).Replace('-', ' ');
         string line = $"{direction} [{packet.Length}] {hex}";
         if (_extendedMode || _loggedPackets++ < LoggedPacketsPerCapture) _logger.Info($"packet {line}");
         CollectPacket(line);
@@ -929,10 +919,14 @@ internal partial class MainWindow : Window
         public IReadOnlyList<InterfaceItem> Interfaces =>
         [
             .. Profile.AllConnections()
-                .SelectMany(connection => connection.Interfaces.Select(item => (Connection: connection, Interface: item)))
+                .SelectMany(connection =>
+                {
+                    bool present = HidSharp.DeviceList.Local.GetHidDevices(connection.VendorId, connection.ProductId).Any();
+                    return connection.Interfaces.Select(item => (Connection: connection, Interface: item, Present: present));
+                })
                 .Select((pair, index) => new InterfaceItem(pair.Interface, index + 1,
                     Profile.Connections is { Count: > 0 } ? $"{pair.Connection.VendorId:X4}:{pair.Connection.ProductId:X4}" : null,
-                    HidSharp.DeviceList.Local.GetHidDevices(pair.Connection.VendorId, pair.Connection.ProductId).Any()))
+                    pair.Present))
         ];
     }
 

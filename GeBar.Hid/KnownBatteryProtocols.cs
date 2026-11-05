@@ -246,18 +246,12 @@ public static class KnownBatteryProtocols
     internal static BatteryCommand? Find(string? name) =>
         string.IsNullOrEmpty(name) ? null : All.FirstOrDefault(command => command.Name.Equals(name, StringComparison.Ordinal));
 
-    internal static bool Accepts(byte[] response, BatteryCommand command) =>
-        Validate(response, command)
-        && response.Length > command.PercentageOffset
-        && response[command.PercentageOffset] is >= 1 and <= 100;
-
     internal static byte[] Request(BatteryCommand command, HidRequestKind kind, int reportLength) =>
         kind == HidRequestKind.Output ? Pad(command.Request, reportLength) : command.Request;
 
-    private static bool Validate(byte[] response, BatteryCommand command)
+    internal static bool Accepts(byte[] response, BatteryCommand command)
     {
-        if (response.Length <= command.PercentageOffset) return false;
-        if (response.All(value => value == 0)) return false;
+        if (response.Length <= command.PercentageOffset || response[command.PercentageOffset] is < 1 or > 100) return false;
         if (command.Verify is not null && !command.Verify(response)) return false;
         if (command.EchoHex is null || command.Kind != HidRequestKind.Feature) return true;
         int bytes = command.EchoHex.Length / 2;

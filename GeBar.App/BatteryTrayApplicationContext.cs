@@ -26,7 +26,6 @@ internal sealed class BatteryTrayApplicationContext
     private readonly Dictionary<string, BatteryNotificationRules> _notifications = new(StringComparer.OrdinalIgnoreCase);
     private readonly bool _diagnosticsMode;
     private readonly GitHubUpdateService _updates;
-    private Task? _updateLoop;
     private GitHubRelease? _availableRelease;
     private string? _notifiedRelease;
     private bool _updateBalloonActive;
@@ -67,7 +66,7 @@ internal sealed class BatteryTrayApplicationContext
         SystemEvents.SessionSwitch += OnSessionSwitch;
         UpdateUi(_monitor.CurrentState);
         if (diagnostics) ShowMain();
-        _ = StartAsync(); _updateLoop = RunUpdateLoopAsync(_lifetime.Token);
+        _ = StartAsync(); _ = RunUpdateLoopAsync(_lifetime.Token);
         _ = CheckStartupSelectionAsync(_lifetime.Token);
         WatchProfiles();
     }
@@ -459,7 +458,6 @@ internal sealed class BatteryTrayApplicationContext
 
     private async Task RunUpdateLoopAsync(CancellationToken token)
     {
-        if (!_updates.IsConfigured) return;
         try
         {
             await Task.Delay(TimeSpan.FromSeconds(10), token).ConfigureAwait(false);
@@ -482,8 +480,7 @@ internal sealed class BatteryTrayApplicationContext
             if (release is null)
             {
                 if (interactive) AppDialog.Show(null,
-                    !_updates.IsConfigured ? Strings.UpdateUnavailable
-                    : !_updates.LastCheckFailed ? Strings.NoUpdates
+                    !_updates.LastCheckFailed ? Strings.NoUpdates
                     : _updates.LastAccess switch
                     {
                         UpdateAccess.NoToken => Strings.TokenMissing,
@@ -507,16 +504,7 @@ internal sealed class BatteryTrayApplicationContext
 
     private async Task SwitchChannelAsync(ReleaseChannel channel, string token)
     {
-        if (channel == ReleaseChannel.Dev)
-        {
-            try { _updates.SetToken(token); }
-            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
-            {
-                _logger.Error("Cannot save GitHub token", ex);
-                AppDialog.Show(null, Strings.TokenSaveError, Strings.AppName);
-                return;
-            }
-        }
+        if (channel == ReleaseChannel.Dev && !SaveGitHubToken(token)) return;
         await CheckUpdatesAsync(true, channel);
     }
 
@@ -605,20 +593,14 @@ internal sealed class BatteryTrayApplicationContext
 
     private void ReportBug(string description)
     {
-        (string identifier, string report, Uri? issueUri, string? logFolder) = _updates.CreateBugReport(description,
+        (Uri issueUri, string? logFolder) = _updates.CreateBugReport(description,
             $"Refresh {_settings.RefreshIntervalSeconds} s / raw packets {(_settings.LogRawPackets ? "on" : "off")}", BugReportDetails());
         try
         {
-            if (issueUri is not null)
-            {
-                Process.Start(new ProcessStartInfo(issueUri.AbsoluteUri) { UseShellExecute = true });
-                if (logFolder is not null) Process.Start(new ProcessStartInfo("explorer.exe", $"\"{logFolder}\"") { UseShellExecute = true });
-                return;
-            }
-            System.Windows.Clipboard.SetText(report);
-            AppDialog.Show(null, Strings.BugReportingUnavailable, identifier);
+            Process.Start(new ProcessStartInfo(issueUri.AbsoluteUri) { UseShellExecute = true });
+            if (logFolder is not null) Process.Start(new ProcessStartInfo("explorer.exe", $"\"{logFolder}\"") { UseShellExecute = true });
         }
-        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or System.Runtime.InteropServices.ExternalException)
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             _logger.Error("Cannot open bug report", ex);
         }

@@ -36,12 +36,6 @@ public sealed class HidCaptureSession : IAsyncDisposable
         return Task.CompletedTask;
     }
 
-    public async Task SendAsync(ReadOnlyMemory<byte> packet, CancellationToken token)
-    {
-        HidStream stream = _stream ?? throw new InvalidOperationException("Сначала запустите захват интерфейса.");
-        await stream.WriteAsync(packet, token).ConfigureAwait(false);
-    }
-
     private async Task ReadLoopAsync(int reportLength, CancellationToken token)
     {
         var buffer = new byte[Math.Max(1, reportLength)];

@@ -2,7 +2,7 @@ using System.Globalization;
 
 namespace GeBar.Dpi;
 
-internal static class Text
+internal static class Strings
 {
     private static bool Ru => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "ru";
     public static string Title => Ru ? "Настройки мыши" : "Mouse settings";

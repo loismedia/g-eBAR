@@ -18,7 +18,6 @@ internal static class Strings
     public static string HidReleaseUnavailable => Ru ? "g-eHID недоступен в этом релизе" : "g-eHID is unavailable in this release";
     public static string HidReleaseVersion(string value) => $"g-eHID {value}";
     public static string HidAvailableVersion(string value) => Ru ? $"Доступна версия g-eHID: {value}" : $"g-eHID version available: {value}";
-    public static string HidInstalled => Ru ? "g-eHID установлен." : "g-eHID has been installed.";
     public static string HidInstallHint => Ru ? "g-eHID не установлен. Откройте «Обновление» и отметьте g-eHID." : "g-eHID is not installed. Open Check for updates and select g-eHID.";
     public static string HidRemoveError => Ru ? "Не удалось удалить g-eHID." : "Could not remove g-eHID.";
     public static string EmptyValue => "—";
@@ -58,7 +57,6 @@ internal static class Strings
         : Ru ? $"осталось ≈ {(int)value.TotalHours} ч {value.Minutes} мин" : $"≈ {(int)value.TotalHours} h {value.Minutes} min left";
     public static string ReportBug => Ru ? "Зарепортить багу" : "Report bug";
     public static string BugDescriptionRequired => Ru ? "Сначала опишите ошибку." : "Describe the bug first.";
-    public static string BugReportingUnavailable => Ru ? "Адрес GitHub-репозитория отсутствует в этой сборке. Отчёт скопирован в буфер обмена." : "This build has no GitHub repository address. The report was copied to the clipboard.";
     public static string NewVersion => Ru ? "Доступна новая версия" : "New version available";
     public static string CurrentVersion(string value) => Ru ? $"Текущая версия: {value}" : $"Current version: {value}";
     public static string AvailableVersion(string value) => Ru ? $"Доступна версия: {value}" : $"Available version: {value}";

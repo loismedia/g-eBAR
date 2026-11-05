@@ -32,7 +32,7 @@ public sealed class WaizowlSettingsDriver(IAppLogger logger) : IMouseSettingsDri
     {
         Snapshot current = await ReadSnapshot(stream, product, token, logger).ConfigureAwait(false);
         if (!Limits(product == 0x0728, current.Layout.MaximumDpi).Accepts(requested)) throw new ArgumentOutOfRangeException(nameof(requested));
-        if (current.Settings != expected) throw new InvalidOperationException(Text.ChangedExternally);
+        if (current.Settings != expected) throw new InvalidOperationException(Strings.ChangedExternally);
         if (requested == expected) return expected;
         byte[] write = WriteRequest(current, requested);
         await Exchange(stream, write, token, logger).ConfigureAwait(false);
@@ -43,7 +43,7 @@ public sealed class WaizowlSettingsDriver(IAppLogger logger) : IMouseSettingsDri
             await Task.Delay(60, token).ConfigureAwait(false);
         }
         Snapshot actual = await ReadSnapshot(stream, product, token, logger).ConfigureAwait(false);
-        if (actual.Settings != requested || actual.Layout != current.Layout) throw new IOException(Text.VerificationFailed);
+        if (actual.Settings != requested || actual.Layout != current.Layout) throw new IOException(Strings.VerificationFailed);
         logger.Info($"g-eDPI: Waizowl settings verified, model={actual.Layout.Name}, DPI={actual.Settings.Dpi}, polling={actual.Settings.PollingRate} Hz, LOD={actual.Settings.Lod} mm");
         return actual.Settings;
     }
@@ -65,12 +65,12 @@ public sealed class WaizowlSettingsDriver(IAppLogger logger) : IMouseSettingsDri
         byte[] sensor = await Exchange(stream, Request(wireless ? (byte)0x44 : (byte)0x04, 1), token, trace,
             packet => IsSensorSnapshot(packet, layout.MaximumDpi, layout.LodOffset)).ConfigureAwait(false);
         int active = sensor[8];
-        if (active > 4 || (sensor[7] & (1 << active)) == 0 || status[9] != active) throw new InvalidDataException(Text.InvalidResponse);
+        if (active > 4 || (sensor[7] & (1 << active)) == 0 || status[9] != active) throw new InvalidDataException(Strings.InvalidResponse);
         int dpi = BinaryPrimitives.ReadUInt16LittleEndian(sensor.AsSpan(9 + active * 4, 2));
         int rate = DecodePolling(status[10]);
         double lod = sensor[layout.LodOffset];
         var settings = new MouseSettings(dpi, rate, lod);
-        if (!Limits(wireless, layout.MaximumDpi).Accepts(settings)) throw new InvalidDataException(Text.InvalidResponse);
+        if (!Limits(wireless, layout.MaximumDpi).Accepts(settings)) throw new InvalidDataException(Strings.InvalidResponse);
         return new(layout, sensor, settings);
     }
 
@@ -79,7 +79,7 @@ public sealed class WaizowlSettingsDriver(IAppLogger logger) : IMouseSettingsDri
         byte[] packet = [.. current.Packet];
         bool wireless = packet[1] == 0x44;
         if (packet.Length != 65 || packet[1] is not (0x44 or 0x04) || packet[4] is not (1 or 2)
-            || !Limits(wireless, current.Layout.MaximumDpi).Accepts(requested)) throw new InvalidDataException(Text.InvalidResponse);
+            || !Limits(wireless, current.Layout.MaximumDpi).Accepts(requested)) throw new InvalidDataException(Strings.InvalidResponse);
         packet[4] = 2;
         if (requested.Dpi != current.Settings.Dpi)
         {
@@ -104,7 +104,7 @@ public sealed class WaizowlSettingsDriver(IAppLogger logger) : IMouseSettingsDri
         "F6070000" => new("Cloud XS", 29, 30000),
         "F3070000" or "F5070000" => new("OGM PRO V2", 29, 30000),
         "B0070000" => new("OGM PRO", 44, 26000),
-        _ => throw new NotSupportedException($"{Text.Unsupported} ({Convert.ToHexString(id)})")
+        _ => throw new NotSupportedException($"{Strings.Unsupported} ({Convert.ToHexString(id)})")
     };
 
     private static ModelLayout ProductLayout(int product) => product switch
@@ -114,13 +114,13 @@ public sealed class WaizowlSettingsDriver(IAppLogger logger) : IMouseSettingsDri
         0x07A3 => new("Cloud XS", 29, 30000),
         0x07A0 or 0x07A2 => new("OGM PRO V2", 29, 30000),
         0x0726 => new("OGM PRO", 44, 26000),
-        _ => throw new NotSupportedException(Text.Unsupported)
+        _ => throw new NotSupportedException(Strings.Unsupported)
     };
 
     private static bool SupportedProduct(int product) => product is 0x0728 or 0x072C or 0x07A1 or 0x07A3 or 0x07A0 or 0x07A2 or 0x0726;
     private static MouseSettingsCapabilities Limits(bool wireless, int maximum) => new(100, maximum, 50, wireless ? [125, 500, 1000, 2000, 4000, 8000] : [125, 500, 1000], [1, 2]);
     internal static byte EncodePolling(int rate) => rate switch { 125 => 0, 500 => 2, 1000 => 3, 2000 => 4, 4000 => 5, 8000 => 6, _ => throw new ArgumentOutOfRangeException(nameof(rate)) };
-    internal static int DecodePolling(byte rate) => rate switch { 0 => 125, 2 => 500, 3 => 1000, 4 => 2000, 5 => 4000, 6 => 8000, _ => throw new InvalidDataException(Text.InvalidResponse) };
+    internal static int DecodePolling(byte rate) => rate switch { 0 => 125, 2 => 500, 3 => 1000, 4 => 2000, 5 => 4000, 6 => 8000, _ => throw new InvalidDataException(Strings.InvalidResponse) };
 
     internal static byte[] Request(byte command, byte operation)
     {
@@ -169,12 +169,12 @@ public sealed class WaizowlSettingsDriver(IAppLogger logger) : IMouseSettingsDri
             }
             token.ThrowIfCancellationRequested();
         }
-        throw new IOException(Text.Unavailable);
+        throw new IOException(Strings.Unavailable);
     }
 
     private async Task<MouseSettings> UseDevice(HidDeviceProfile device, Func<HidStream, int, CancellationToken, Task<MouseSettings>> action, CancellationToken token, bool readOnly = false)
     {
-        if (!Supports(device)) throw new NotSupportedException(Text.Unsupported);
+        if (!Supports(device)) throw new NotSupportedException(Strings.Unsupported);
         bool attempted = false;
         foreach (HidDeviceConnectionProfile connection in device.AllConnections()
             .Where(connection => connection.VendorId == 0x1915 && SupportedProduct(connection.ProductId)).OrderBy(connection => connection.ProductId == 0x0728 ? 1 : 0))
@@ -206,7 +206,7 @@ public sealed class WaizowlSettingsDriver(IAppLogger logger) : IMouseSettingsDri
                 catch (IOException error) when (readOnly) { logger.Warning($"g-eDPI: Waizowl settings read failed: {error.Message}"); }
             }
         }
-        throw new IOException(attempted ? Text.Unavailable : Text.InterfaceUnavailable);
+        throw new IOException(attempted ? Strings.Unavailable : Strings.InterfaceUnavailable);
     }
 
     internal static bool IsSettingsInterface(HidInterfaceProfile descriptor, HidBatteryProtocolProfile battery) =>

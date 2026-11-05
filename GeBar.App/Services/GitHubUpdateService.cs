@@ -41,7 +41,6 @@ internal sealed partial class GitHubUpdateService : IDisposable
 
     private const int MaximumLogLines = 5000;
     private const int MaximumDescription = 2000;
-    public bool IsConfigured => true;
     public bool HasToken => !string.IsNullOrWhiteSpace(_token);
     public bool LastCheckFailed { get; private set; }
     public UpdateAccess LastAccess { get; private set; } = UpdateAccess.Unknown;
@@ -76,7 +75,7 @@ internal sealed partial class GitHubUpdateService : IDisposable
         _token = token?.Trim() ?? string.Empty;
     }
 
-    public (string Identifier, string Report, Uri? IssueUri, string? LogPath) CreateBugReport(string description, string settings, IReadOnlyList<string> details)
+    public (Uri IssueUri, string? LogPath) CreateBugReport(string description, string settings, IReadOnlyList<string> details)
     {
         string version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "1.0.0";
         string suffix = RandomNumberGenerator.GetString("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", 4);
@@ -93,10 +92,8 @@ internal sealed partial class GitHubUpdateService : IDisposable
             .AppendLine();
         foreach (string line in details) builder.AppendLine(line);
         string report = builder.ToString();
-        Uri? uri = IsConfigured
-            ? new Uri($"https://github.com/{BuildChannel.Repository(_currentChannel)}/issues/new?title={Uri.EscapeDataString(identifier)}&body={Uri.EscapeDataString(report)}")
-            : null;
-        return (identifier, report, uri, logFolder);
+        var uri = new Uri($"https://github.com/{BuildChannel.Repository(_currentChannel)}/issues/new?title={Uri.EscapeDataString(identifier)}&body={Uri.EscapeDataString(report)}");
+        return (uri, logFolder);
     }
 
     private static string? CopyTodayLogs(string identifier)
@@ -117,8 +114,7 @@ internal sealed partial class GitHubUpdateService : IDisposable
         if (!System.IO.Directory.Exists(directory)) return false;
         string[] files = [.. System.IO.Directory.GetFiles(directory, $"{name}-{DateTime.Now:yyyy-MM-dd}*.log").Order(StringComparer.OrdinalIgnoreCase)];
         if (files.Length == 0) return false;
-        string[] lines = [.. files.SelectMany(FileLogger.ReadLines)];
-        File.WriteAllLines(Path.Combine(target, $"{name}.log"), lines.Length <= MaximumLogLines ? lines : lines[^MaximumLogLines..]);
+        File.WriteAllLines(Path.Combine(target, $"{name}.log"), files.SelectMany(FileLogger.ReadLines).TakeLast(MaximumLogLines));
         return true;
     }
 
@@ -134,7 +130,6 @@ internal sealed partial class GitHubUpdateService : IDisposable
 
     public async Task<GitHubRelease?> CheckAsync(CancellationToken token, bool allowStableRollback = false, ReleaseChannel? targetChannel = null)
     {
-        if (!IsConfigured) return null;
         ReleaseChannel channel = targetChannel ?? _currentChannel;
         bool switching = channel != _currentChannel;
         string repository = BuildChannel.Repository(channel);
@@ -158,18 +153,14 @@ internal sealed partial class GitHubUpdateService : IDisposable
                     && (channel == ReleaseChannel.Dev || !item.GetProperty("prerelease").GetBoolean()))
                 .ToArray();
             LastCheckFailed = false;
-            var versionedReleases = releases
-                .Where(item => item.GetProperty("assets").EnumerateArray().Any(asset => string.Equals(asset.GetProperty("name").GetString(), "g-eBAR.exe", StringComparison.OrdinalIgnoreCase)))
-                .Select(item => (Release: item, Tag: item.GetProperty("tag_name").GetString() ?? string.Empty))
-                .Select(item => (item.Release, item.Tag, Parsed: Version.TryParse(item.Tag.TrimStart('v', 'V'), out Version? parsed), Version: parsed))
-                .Where(item => item.Parsed && item.Version is not null)
+            var versionedReleases = Versioned(releases)
+                .Where(item => FindAsset(item.Release, "g-eBAR.exe") is not null)
                 .OrderByDescending(item => item.Version)
                 .ToArray();
             if (versionedReleases.Length == 0) return null;
             JsonElement root = versionedReleases[0].Release;
             bool isNightly = root.GetProperty("prerelease").GetBoolean();
-            string tag = versionedReleases[0].Tag;
-            Version version = versionedReleases[0].Version!;
+            Version version = versionedReleases[0].Version;
             Version current = Assembly.GetExecutingAssembly().GetName().Version ?? new Version(1, 0);
             if (current.Revision == 0) current = new Version(current.Major, current.Minor, current.Build);
             bool isDowngrade = switching && version < current;
@@ -177,56 +168,29 @@ internal sealed partial class GitHubUpdateService : IDisposable
             {
                 foreach (var stable in versionedReleases.Where(item => !item.Release.GetProperty("prerelease").GetBoolean() && item.Version < current))
                 {
-                    JsonElement candidate = stable.Release;
-                    string candidateTag = stable.Tag;
-                    Version candidateVersion = stable.Version!;
-                    if (!candidate.GetProperty("assets").EnumerateArray().Any(item => string.Equals(item.GetProperty("name").GetString(), "g-eBAR.exe", StringComparison.OrdinalIgnoreCase))) continue;
-                    root = candidate;
-                    tag = candidateTag;
-                    version = candidateVersion;
+                    root = stable.Release;
+                    version = stable.Version;
                     isNightly = false;
                     isDowngrade = true;
                     break;
                 }
             }
+            string tag = root.GetProperty("tag_name").GetString()!;
             bool appUpdateAvailable = switching || version > current || isDowngrade;
-            JsonElement[] assets = root.GetProperty("assets").EnumerateArray().ToArray();
-            JsonElement? asset = assets
-                .Where(item => string.Equals(item.GetProperty("name").GetString(), "g-eBAR.exe", StringComparison.OrdinalIgnoreCase))
-                .Cast<JsonElement?>()
-                .FirstOrDefault();
-            if (appUpdateAvailable && asset is null)
-            {
-                _logger.Warning($"Release {tag} has no executable asset");
-                return null;
-            }
+            JsonElement? asset = FindAsset(root, "g-eBAR.exe");
             Uri? downloadUri = AssetUri(asset);
             if (appUpdateAvailable && downloadUri is null) return null;
             IEnumerable<JsonElement> moduleReleases = releases;
             if (isDowngrade && !isNightly)
-                moduleReleases = releases.Where(item => !item.GetProperty("prerelease").GetBoolean()
-                    && Version.TryParse(item.GetProperty("tag_name").GetString()?.TrimStart('v', 'V'), out Version? moduleVersion) && moduleVersion <= version)
-                    .OrderByDescending(item => Version.Parse(item.GetProperty("tag_name").GetString()!.TrimStart('v', 'V')));
-            JsonElement? hidRelease = moduleReleases.Cast<JsonElement?>().FirstOrDefault(item =>
-            {
-                return item?.GetProperty("assets").EnumerateArray().Any(asset => string.Equals(asset.GetProperty("name").GetString(), "g-eHID.exe", StringComparison.OrdinalIgnoreCase)) == true;
-            });
-            JsonElement? hidAsset = hidRelease?.GetProperty("assets").EnumerateArray()
-                .Where(item => string.Equals(item.GetProperty("name").GetString(), "g-eHID.exe", StringComparison.OrdinalIgnoreCase))
-                .Cast<JsonElement?>().FirstOrDefault();
-            Match hidMatch = Regex.Match(hidRelease?.GetProperty("body").GetString() ?? string.Empty, "g-eHID:\\s*(?<version>\\d{2}\\.\\d{2}-hid-[A-Za-z0-9]{5})", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-            string? hidVersion = hidMatch.Success ? hidMatch.Groups["version"].Value : null;
+                moduleReleases = Versioned(releases).Where(item => !item.Release.GetProperty("prerelease").GetBoolean() && item.Version <= version)
+                    .OrderByDescending(item => item.Version).Select(item => item.Release).ToArray();
+            (string? hidVersion, JsonElement? hidAsset) = FindModule(moduleReleases, "g-eHID.exe", @"g-eHID:\s*(?<version>\d{2}\.\d{2}-hid-[A-Za-z0-9]{5})");
             Uri? hidDownloadUri = AssetUri(hidAsset);
             bool hidUpdateAvailable = hidVersion is not null && hidDownloadUri is not null
                 && (switching || !string.Equals(GetInstalledHidVersion(), hidVersion, StringComparison.OrdinalIgnoreCase));
             if (switching && GetInstalledHidVersion() is not null && !hidUpdateAvailable)
                 throw new InvalidOperationException("The target channel has no compatible g-eHID module.");
-            JsonElement? dpiRelease = moduleReleases.Cast<JsonElement?>().FirstOrDefault(item => item?.GetProperty("assets").EnumerateArray()
-                .Any(asset => string.Equals(asset.GetProperty("name").GetString(), "g-eDPI.dll", StringComparison.OrdinalIgnoreCase)) == true);
-            JsonElement? dpiAsset = dpiRelease?.GetProperty("assets").EnumerateArray()
-                .Where(item => string.Equals(item.GetProperty("name").GetString(), "g-eDPI.dll", StringComparison.OrdinalIgnoreCase)).Cast<JsonElement?>().FirstOrDefault();
-            Match dpiMatch = Regex.Match(dpiRelease?.GetProperty("body").GetString() ?? string.Empty, @"g-eDPI:\s*(?<version>\d{2}\.\d{2}-dpi-[A-Za-z0-9]{5})", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-            string? dpiVersion = dpiMatch.Success ? dpiMatch.Groups["version"].Value : null;
+            (string? dpiVersion, JsonElement? dpiAsset) = FindModule(moduleReleases, "g-eDPI.dll", @"g-eDPI:\s*(?<version>\d{2}\.\d{2}-dpi-[A-Za-z0-9]{5})");
             Uri? dpiDownloadUri = AssetUri(dpiAsset);
             bool dpiUpdateAvailable = dpiVersion is not null && dpiDownloadUri is not null
                 && (!switching && !string.Equals(GetInstalledDpiVersion(), dpiVersion, StringComparison.OrdinalIgnoreCase) || switching && channel == ReleaseChannel.Dev);
@@ -240,6 +204,31 @@ internal sealed partial class GitHubUpdateService : IDisposable
             if (!token.IsCancellationRequested) _logger.Error("Update check failed", ex);
             return null;
         }
+    }
+
+    private static IEnumerable<(JsonElement Release, Version Version)> Versioned(IEnumerable<JsonElement> releases)
+    {
+        foreach (JsonElement release in releases)
+            if (Version.TryParse(release.GetProperty("tag_name").GetString()?.TrimStart('v', 'V'), out Version? version))
+                yield return (release, version);
+    }
+
+    private static JsonElement? FindAsset(JsonElement release, string name)
+    {
+        foreach (JsonElement asset in release.GetProperty("assets").EnumerateArray())
+            if (string.Equals(asset.GetProperty("name").GetString(), name, StringComparison.OrdinalIgnoreCase)) return asset;
+        return null;
+    }
+
+    private static (string? Version, JsonElement? Asset) FindModule(IEnumerable<JsonElement> releases, string name, string pattern)
+    {
+        foreach (JsonElement release in releases)
+        {
+            if (FindAsset(release, name) is not JsonElement asset) continue;
+            Match match = Regex.Match(release.GetProperty("body").GetString() ?? string.Empty, pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            return (match.Success ? match.Groups["version"].Value : null, asset);
+        }
+        return (null, null);
     }
 
     private async Task<UpdateAccess> DiagnoseAsync(System.Net.HttpStatusCode status, CancellationToken token)
@@ -461,14 +450,11 @@ internal sealed partial class GitHubUpdateService : IDisposable
         await using Stream stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
         using JsonDocument document = await JsonDocument.ParseAsync(stream, cancellationToken: token).ConfigureAwait(false);
         Version.TryParse(releaseTag?.TrimStart('v', 'V'), out Version? ceiling);
-        string[] entries = document.RootElement.EnumerateArray()
-            .Where(item => !item.GetProperty("draft").GetBoolean()
-                && (channel == ReleaseChannel.Dev || !item.GetProperty("prerelease").GetBoolean()))
-            .Select(item => (Release: item, Tag: item.GetProperty("tag_name").GetString() ?? string.Empty))
-            .Select(item => (item.Release, item.Tag, Parsed: Version.TryParse(item.Tag.TrimStart('v', 'V'), out Version? version), Version: version))
-            .Where(item => item.Parsed && item.Version is not null && (ceiling is null || item.Version <= ceiling))
+        string[] entries = Versioned(document.RootElement.EnumerateArray()
+            .Where(item => !item.GetProperty("draft").GetBoolean() && !item.GetProperty("prerelease").GetBoolean()))
+            .Where(item => ceiling is null || item.Version <= ceiling)
             .OrderByDescending(item => item.Version)
-            .Select(item => $"## g-eBAR {item.Tag}\n\n{item.Release.GetProperty("body").GetString()}\n")
+            .Select(item => $"## g-eBAR {item.Release.GetProperty("tag_name").GetString()}\n\n{item.Release.GetProperty("body").GetString()}\n")
             .ToArray();
         if (entries.Length == 0) throw new InvalidOperationException("No published release to read the changelog from.");
         return "# Version history\n\n" + string.Join("\n", entries);
@@ -484,14 +470,11 @@ internal sealed partial class GitHubUpdateService : IDisposable
             response.EnsureSuccessStatusCode();
             await using Stream stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
             using JsonDocument document = await JsonDocument.ParseAsync(stream, cancellationToken: token).ConfigureAwait(false);
-            releaseTag = document.RootElement.EnumerateArray()
+            releaseTag = Versioned(document.RootElement.EnumerateArray()
                 .Where(item => !item.GetProperty("draft").GetBoolean()
-                    && item.GetProperty("assets").EnumerateArray().Any(asset => string.Equals(asset.GetProperty("name").GetString(), "g-eBAR.exe", StringComparison.OrdinalIgnoreCase)))
-                .Select(item => item.GetProperty("tag_name").GetString() ?? string.Empty)
-                .Select(tag => (Tag: tag, Parsed: Version.TryParse(tag.TrimStart('v', 'V'), out Version? version), Version: version))
-                .Where(item => item.Parsed && item.Version is not null)
+                    && FindAsset(item, "g-eBAR.exe") is not null))
                 .OrderByDescending(item => item.Version)
-                .Select(item => item.Tag)
+                .Select(item => item.Release.GetProperty("tag_name").GetString())
                 .FirstOrDefault()
                 ?? throw new InvalidOperationException("No published release to read the changelog from.");
         }

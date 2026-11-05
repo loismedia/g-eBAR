@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using GeBar.App;
 using GeBar.Core;
 
@@ -26,6 +27,31 @@ public class UpdateChannelTests
             new { name = "g-eHID.exe", url = "https://api.github.com/repos/loismedia/g-eBAR/releases/assets/2", digest = "sha256:" + new string('B', 64) }
         }
     };
+
+    [Fact]
+    public async Task ReleaseParsingIgnoresInvalidVersionsAndKeepsCaseInsensitiveAssetNames()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"gebar-release-parsing-{Guid.NewGuid():N}");
+        try
+        {
+            var payload = new JsonArray(JsonSerializer.SerializeToNode(Release("invalid", false)), JsonSerializer.SerializeToNode(Release("99.0.0", false)));
+            payload[1]!["assets"]![0]!["name"] = "G-EBAR.EXE";
+            payload[1]!["assets"]![1]!["name"] = "G-EHID.EXE";
+            using var client = new HttpClient(new Handler(_ => new(HttpStatusCode.OK) { Content = new StringContent(payload.ToJsonString()) }));
+            using var service = new GitHubUpdateService(new FileLogger(directory, "test"), client, "", ReleaseChannel.Public);
+
+            GitHubRelease? release = await service.CheckAsync(CancellationToken.None);
+            string history = await service.DownloadChangelogAsync(null, CancellationToken.None);
+
+            Assert.NotNull(release);
+            Assert.Equal(new Version(99, 0, 0), release.Version);
+            Assert.Equal("02.11-hid-ABCDE", release.HidVersion);
+            Assert.Equal("https://api.github.com/repos/loismedia/g-eBAR/releases/assets/1", release.DownloadUrl?.AbsoluteUri);
+            Assert.Contains("g-eBAR v99.0.0", history);
+            Assert.DoesNotContain("vinvalid", history);
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
 
     [Fact]
     public async Task PublicIgnoresNightlyAndDoesNotSendStoredDevToken()

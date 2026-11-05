@@ -20,7 +20,7 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
     private readonly TextBox _dpi = new();
     private readonly ComboBox _polling = new() { Width = 112, DisplayMemberPath = "Label", SelectedValuePath = "Value" };
     private readonly ComboBox _lod = new() { Width = 112, DisplayMemberPath = "Label", SelectedValuePath = "Value" };
-    private readonly Button _refresh = new() { Width = 36, Height = 36, Padding = new(0), ToolTip = Text.Read,
+    private readonly Button _refresh = new() { Width = 36, Height = 36, Padding = new(0), ToolTip = Strings.Read,
         Content = new TextBlock { Text = "\uE72C", FontFamily = new FontFamily("Segoe Fluent Icons"), FontSize = 16 } };
     private readonly StackPanel _fields = new();
     private CancellationTokenSource? _readLifetime;
@@ -45,21 +45,21 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
         _logger = logger;
         _drivers = drivers;
         var panel = new StackPanel();
-        var title = new TextBlock { Text = Text.Title };
+        var title = new TextBlock { Text = Strings.Title };
         title.SetResourceReference(FrameworkElement.StyleProperty, "GroupHeader");
         panel.Children.Add(title);
         panel.Children.Add(_deviceName);
         _deviceName.Margin = new(4, 0, 0, 12);
         Grid.SetIsSharedSizeScope(_fields, true);
-        AutomationProperties.SetName(_refresh, Text.Read);
+        AutomationProperties.SetName(_refresh, Strings.Read);
         _dpi.SetResourceReference(FrameworkElement.StyleProperty, "NumberBox");
         _range.SetResourceReference(TextBlock.ForegroundProperty, "SecondaryText");
         var dpiLabel = new StackPanel();
         dpiLabel.Children.Add(new TextBlock { Text = "DPI" });
         dpiLabel.Children.Add(_range);
         _fields.Children.Add(Row(dpiLabel, _dpi, false));
-        _fields.Children.Add(Row(new TextBlock { Text = Text.Polling }, _polling, false));
-        _fields.Children.Add(Row(new TextBlock { Text = Text.Lod }, _lod, true));
+        _fields.Children.Add(Row(new TextBlock { Text = Strings.Polling }, _polling, false));
+        _fields.Children.Add(Row(new TextBlock { Text = Strings.Lod }, _lod, true));
         var card = new Border { Child = _fields, HorizontalAlignment = HorizontalAlignment.Left };
         card.SetResourceReference(FrameworkElement.StyleProperty, "Card");
         panel.Children.Add(card);
@@ -111,7 +111,7 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
         }
         _deviceName.Text = device?.DisplayName ?? string.Empty;
         SetBusy(true);
-        _status.Text = _driver is null ? Text.Unsupported : Text.Loading;
+        _status.Text = _driver is null ? Strings.Unsupported : Strings.Loading;
         try
         {
             if (_driver is null || device is null) return;
@@ -123,7 +123,7 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
             ShowCapabilities(driver.Capabilities);
             Show(settings);
             PublishSettings(settings);
-            _status.Text = Text.Hint;
+            _status.Text = Strings.Hint;
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
         catch (Exception error) when (error is IOException or InvalidOperationException or UnauthorizedAccessException or NotSupportedException)
@@ -153,7 +153,7 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
             _cache[device.Id] = (saved, driver.Capabilities);
             Show(saved);
             PublishSettings(saved);
-            _status.Text = Text.Hint;
+            _status.Text = Strings.Hint;
             return true;
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { return false; }
@@ -165,7 +165,7 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
                 _current = null;
                 _cache.Remove(device.Id);
                 PublishSettings(null);
-                _status.Text = error is ArgumentException ? Text.ChangedExternally : error.Message;
+                _status.Text = error is ArgumentException ? Strings.ChangedExternally : error.Message;
             }
             return false;
         }
@@ -274,7 +274,7 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
 
     private void ShowCapabilities(MouseSettingsCapabilities caps)
     {
-        _range.Text = Text.DpiRange(caps.MinimumDpi, caps.MaximumDpi, caps.DpiStep);
+        _range.Text = Strings.DpiRange(caps.MinimumDpi, caps.MaximumDpi, caps.DpiStep);
         _polling.ItemsSource = caps.PollingRates.Select(rate => new Choice<int>(rate, $"{rate} Hz")).ToArray();
         _lod.ItemsSource = caps.LodValues.Select(lod => new Choice<double>(lod, $"{lod.ToString("0.#", CultureInfo.CurrentCulture)} mm")).ToArray();
     }

@@ -22,7 +22,7 @@ public sealed class WlMouseSettingsDriver(IAppLogger logger) : IMouseSettingsDri
     {
         if (!Capabilities.Accepts(requested)) throw new ArgumentOutOfRangeException(nameof(requested));
         Snapshot current = await ReadSnapshot(stream, token).ConfigureAwait(false);
-        if (current.Settings != expected) throw new InvalidOperationException(Text.ChangedExternally);
+        if (current.Settings != expected) throw new InvalidOperationException(Strings.ChangedExternally);
         if (requested.Dpi != current.Settings.Dpi)
         {
             byte[] packet = DpiRequest(current, requested.Dpi);
@@ -33,14 +33,14 @@ public sealed class WlMouseSettingsDriver(IAppLogger logger) : IMouseSettingsDri
         if (requested.Lod != current.Settings.Lod)
             await Exchange(stream, Request(3, 0x08, 1, current.Profile, EncodeLod(requested.Lod), current.LodMode), token).ConfigureAwait(false);
         MouseSettings actual = await Read(stream, token).ConfigureAwait(false);
-        if (actual != requested) throw new IOException(Text.VerificationFailed);
+        if (actual != requested) throw new IOException(Strings.VerificationFailed);
         logger.Info($"g-eDPI: settings verified, DPI={actual.Dpi}, polling={actual.PollingRate} Hz, LOD={actual.Lod} mm");
         return actual;
     }
 
     private async Task<MouseSettings> UseDevice(HidDeviceProfile profile, Func<HidStream, CancellationToken, Task<MouseSettings>> action, CancellationToken token, bool readOnly = false)
     {
-        if (!Supports(profile)) throw new NotSupportedException(Text.Unsupported);
+        if (!Supports(profile)) throw new NotSupportedException(Strings.Unsupported);
         foreach (HidDeviceConnectionProfile connection in profile.AllConnections().Where(connection => connection.VendorId == 0x36A7 && connection.ProductId is 0xA864 or 0xA863)
             .OrderBy(connection => connection.ProductId == 0xA864 ? 0 : 1))
         {
@@ -57,7 +57,7 @@ public sealed class WlMouseSettingsDriver(IAppLogger logger) : IMouseSettingsDri
                 }
             }
         }
-        throw new IOException(Text.Unavailable);
+        throw new IOException(Strings.Unavailable);
     }
 
     private static int FeatureLength(HidDevice device)
@@ -73,12 +73,12 @@ public sealed class WlMouseSettingsDriver(IAppLogger logger) : IMouseSettingsDri
     internal static async Task<Snapshot> ReadSnapshot(HidStream stream, CancellationToken token)
     {
         byte profile = (await Exchange(stream, Request(1, 0x85, 0), token).ConfigureAwait(false))[7];
-        if (profile is < 1 or > 3) throw new InvalidDataException(Text.InvalidResponse);
+        if (profile is < 1 or > 3) throw new InvalidDataException(Strings.InvalidResponse);
         byte[] stages = await Exchange(stream, Request(10, 0x81, 1, profile, 6), token).ConfigureAwait(false);
         byte count = stages[8];
-        if (count is < 1 or > 6) throw new InvalidDataException(Text.InvalidResponse);
+        if (count is < 1 or > 6) throw new InvalidDataException(Strings.InvalidResponse);
         byte active = (await Exchange(stream, Request(2, 0x82, 1, profile), token).ConfigureAwait(false))[8];
-        if (active < 1 || active > count) throw new InvalidDataException(Text.InvalidResponse);
+        if (active < 1 || active > count) throw new InvalidDataException(Strings.InvalidResponse);
         byte[] special = await Exchange(stream, Request(5, 0x97, 1, profile), token).ConfigureAwait(false);
         bool isSpecial = special[12] != 0;
         int offset = 9 + (active - 1) * 4;
@@ -116,17 +116,17 @@ public sealed class WlMouseSettingsDriver(IAppLogger logger) : IMouseSettingsDri
         byte[]? response = await HidRequestExchange.SendThenReadFeatureAsync(stream, request, 65, 5, 60, token,
             reply => reply.Length == 65 && reply[1] == 0xA1 && reply[3] == 2 && reply[5] == request[5] && reply[6] == request[6]
                 && (request[5] == 0 || reply[7] == request[7])).ConfigureAwait(false);
-        return response ?? throw new IOException(Text.Unavailable);
+        return response ?? throw new IOException(Strings.Unavailable);
     }
 
     private static int ReadDpi(byte[] packet, int offset)
     {
         int dpi = packet[offset] << 8 | packet[offset + 1];
-        return dpi is >= 50 and <= 30000 ? dpi : throw new InvalidDataException(Text.InvalidResponse);
+        return dpi is >= 50 and <= 30000 ? dpi : throw new InvalidDataException(Strings.InvalidResponse);
     }
 
     internal static byte EncodePolling(int rate) => rate switch { 125 => 8, 250 => 4, 500 => 2, 1000 => 1, 2000 => 32, 4000 => 64, 8000 => 128, _ => throw new ArgumentOutOfRangeException(nameof(rate)) };
-    internal static int DecodePolling(byte rate) => rate switch { 8 => 125, 4 => 250, 2 => 500, 1 or 16 => 1000, 32 => 2000, 64 => 4000, 128 => 8000, _ => throw new InvalidDataException(Text.InvalidResponse) };
+    internal static int DecodePolling(byte rate) => rate switch { 8 => 125, 4 => 250, 2 => 500, 1 or 16 => 1000, 32 => 2000, 64 => 4000, 128 => 8000, _ => throw new InvalidDataException(Strings.InvalidResponse) };
     internal static byte EncodeLod(double lod) => lod switch { 0.7 => 0x87, 1 => 1, 2 => 2, _ => throw new ArgumentOutOfRangeException(nameof(lod)) };
-    internal static double DecodeLod(byte lod) => lod switch { 0x87 => 0.7, 1 => 1, 2 => 2, _ => throw new InvalidDataException(Text.InvalidResponse) };
+    internal static double DecodeLod(byte lod) => lod switch { 0x87 => 0.7, 1 => 1, 2 => 2, _ => throw new InvalidDataException(Strings.InvalidResponse) };
 }
