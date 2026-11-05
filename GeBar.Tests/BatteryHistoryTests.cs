@@ -57,6 +57,48 @@ public class BatteryHistoryTests
     }
 
     [Fact]
+    public void PreviousDischargeRateIsUsedImmediatelyAfterCharging()
+    {
+        BatteryPoint[] points = [.. Discharge(90, 80, TimeSpan.FromMinutes(30)),
+            new(Start.AddHours(6), 90, true), new(Start.AddHours(7), 100, true),
+            new(Start.AddHours(8), 100, false), new(Start.AddHours(8).AddMinutes(5), 99, false)];
+
+        Assert.Equal(TimeSpan.FromHours(48), BatteryHistory.EstimateRemaining(points));
+    }
+
+    [Fact]
+    public void ReliableNewDischargeReplacesThePreviousRate()
+    {
+        BatteryPoint[] points = [.. Discharge(90, 80, TimeSpan.FromMinutes(30)),
+            new(Start.AddHours(6), 90, true), new(Start.AddHours(7), 100, true),
+            .. Discharge(100, 94, TimeSpan.FromMinutes(5)).Select(point => point with { Time = point.Time.AddHours(8) })];
+
+        Assert.Equal(TimeSpan.FromHours(91d / 12), BatteryHistory.EstimateRemaining(points));
+    }
+
+    [Theory]
+    [InlineData(10)]
+    [InlineData(60)]
+    public void BatteryRiseDoesNotEraseThePreviousDischargeRate(int gapMinutes)
+    {
+        DateTimeOffset resumed = Start.AddHours(5).AddMinutes(gapMinutes);
+        BatteryPoint[] points = [.. Discharge(90, 80, TimeSpan.FromMinutes(30)),
+            new(resumed, 99, false), new(resumed.AddMinutes(5), 98, false)];
+
+        Assert.Equal(TimeSpan.FromHours(47.5), BatteryHistory.EstimateRemaining(points));
+    }
+
+    [Fact]
+    public void ShortCyclesSeparatedByChargingAreNotCombined()
+    {
+        BatteryPoint[] points = [new(Start, 80, false), new(Start.AddMinutes(20), 77, false),
+            new(Start.AddMinutes(40), 90, true), new(Start.AddMinutes(60), 100, true),
+            new(Start.AddMinutes(80), 99, false), new(Start.AddMinutes(100), 96, false)];
+
+        Assert.Null(BatteryHistory.EstimateRemaining(points));
+    }
+
+    [Fact]
     public void SleepGapIsNotCountedAsDischarge()
     {
         BatteryPoint[] evening = Discharge(90, 80, TimeSpan.FromMinutes(30));

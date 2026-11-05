@@ -68,26 +68,27 @@ internal static partial class BatteryHistory
     {
         if (points.Count < 3 || points[^1].Charging == true) return null;
         int last = points.Count - 1, drop = 0;
-        double hours = 0;
+        TimeSpan observed = TimeSpan.Zero;
         for (int index = last; index > 0; index--)
         {
             BatteryPoint current = points[index], previous = points[index - 1];
-            if (previous.Charging == true || current.Percentage - previous.Percentage >= ChargeRise) break;
             TimeSpan gap = current.Time - previous.Time;
-            if (gap <= TimeSpan.Zero) break;
-            // the app was closed or the machine slept: keep the stretch, but do not count the dark time as discharge
-            if (gap > MaximumGap)
+            if (current.Charging == true || previous.Charging == true || gap <= TimeSpan.Zero
+                || current.Percentage - previous.Percentage >= ChargeRise
+                || gap > MaximumGap && previous.Percentage < current.Percentage)
             {
-                if (previous.Percentage < current.Percentage) break;
+                if (observed.TotalHours >= 0.5 && drop >= MinimumDrop) break;
+                observed = TimeSpan.Zero;
+                drop = 0;
                 continue;
             }
-            hours += gap.TotalHours;
+            if (gap > MaximumGap) continue;
+            observed += gap;
             drop += previous.Percentage - current.Percentage;
-            if (hours >= MaximumSpan.TotalHours) break;
-            if (drop >= MinimumDrop && hours >= 1) break;
+            if (observed >= MaximumSpan || drop >= MinimumDrop && observed.TotalHours >= 1) break;
         }
-        if (hours < 0.5 || drop < MinimumDrop || points[last].Percentage <= ShutdownReserve) return null;
-        double remaining = (points[last].Percentage - ShutdownReserve) * hours / drop;
+        if (observed.TotalHours < 0.5 || drop < MinimumDrop || points[last].Percentage <= ShutdownReserve) return null;
+        double remaining = (points[last].Percentage - ShutdownReserve) * observed.TotalHours / drop;
         return remaining is > 0 and < 720 ? TimeSpan.FromHours(remaining) : null;
     }
 
