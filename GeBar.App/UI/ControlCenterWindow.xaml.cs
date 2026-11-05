@@ -40,7 +40,9 @@ internal partial class ControlCenterWindow : Window
     private DateTimeOffset _historyLoaded;
     private readonly bool _diagnosticsMode;
     private readonly FileLogger _logger;
-    private readonly SettingsModuleLoader _moduleLoader = new();
+    private readonly SettingsModuleLoader _moduleLoader;
+    private readonly bool _ownsModule;
+    private ISettingsModule? _attachedModule;
     private readonly CancellationTokenSource _moduleLifetime = new();
     private readonly Func<string, HidDeviceProfile?>? _resolveDevice;
     private HidDeviceProfile? _moduleDevice;
@@ -52,6 +54,7 @@ internal partial class ControlCenterWindow : Window
     public event EventHandler? CheckUpdatesRequested;
     public event EventHandler? HidLaunchRequested;
     public event EventHandler? HidRemoveRequested;
+    public event EventHandler? DpiRemoveRequested;
     public event Action<string>? BugReportRequested;
     public event EventHandler? ChangelogRequested;
     public event Func<string, bool>? GitHubTokenChanged;
@@ -89,13 +92,17 @@ internal partial class ControlCenterWindow : Window
         if (SettingsSaved is { } save) await save(Value);
     }
 
-    public ControlCenterWindow(AppSettings value, bool diagnostics, string githubToken, FileLogger logger, Func<string, HidDeviceProfile?>? resolveDevice = null)
+    public ControlCenterWindow(AppSettings value, bool diagnostics, string githubToken, FileLogger logger, Func<string, HidDeviceProfile?>? resolveDevice = null,
+        SettingsModuleLoader? moduleLoader = null)
     {
+        _moduleLoader = moduleLoader ?? new();
+        _ownsModule = moduleLoader is null;
         InitializeComponent();
         Value = value;
         _diagnosticsMode = diagnostics;
         _logger = logger;
         _resolveDevice = resolveDevice;
+        _moduleLoader.Changed += ModuleChanged;
         DiagnosticsCard.Visibility = diagnostics ? Visibility.Visible : Visibility.Collapsed;
         HistoryCard.Visibility = diagnostics ? Visibility.Collapsed : Visibility.Visible;
         InitializeText();
@@ -128,7 +135,9 @@ internal partial class ControlCenterWindow : Window
         Closed += (_, _) =>
         {
             _moduleLifetime.Cancel();
-            _moduleLoader.Dispose();
+            _moduleLoader.Changed -= ModuleChanged;
+            DetachModule();
+            if (_ownsModule) _moduleLoader.Dispose();
             _moduleLifetime.Dispose();
         };
     }
@@ -364,6 +373,7 @@ internal partial class ControlCenterWindow : Window
         try
         {
             GitHubUpdateService.RemoveDpi();
+            DpiRemoveRequested?.Invoke(this, EventArgs.Empty);
             UpdateHidState();
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
@@ -377,22 +387,22 @@ internal partial class ControlCenterWindow : Window
     {
         string? version = GitHubUpdateService.GetInstalledHidVersion();
         string? dpiVersion = GitHubUpdateService.GetInstalledDpiVersion();
-        if (_moduleLoader.Module?.Version != dpiVersion)
+        if (_ownsModule && _moduleLoader.Module?.Version != dpiVersion)
         {
-            DpiPage.Content = null;
-            ModuleActions.Content = null;
+            DetachModule();
             _moduleLoader.Dispose();
-            _moduleDevice = null;
             _moduleLoader.Load(GitHubUpdateService.DpiModulePath, _logger);
+        }
+        if (!ReferenceEquals(_attachedModule, _moduleLoader.Module))
+        {
+            DetachModule();
             if (_moduleLoader.Module is ISettingsModule module)
             {
+                _attachedModule = module;
                 DpiPage.Content = module.View;
                 ModuleActions.Content = module.Actions;
-                module.SaveAvailabilityChanged += (_, _) =>
-                {
-                    if (DpiPage.Visibility == Visibility.Visible) SaveButton.IsEnabled = module.CanSave;
-                };
-                if (module is IDeviceSettingsSource source) source.SettingsChanged += (_, _) => UpdateDeviceNames();
+                module.SaveAvailabilityChanged += ModuleSaveChanged;
+                if (module is IDeviceSettingsSource source) source.SettingsChanged += ModuleSettingsChanged;
             }
             DpiTab.Visibility = _moduleLoader.Module is null ? Visibility.Collapsed : Visibility.Visible;
             ModuleActions.Visibility = DpiPage.Visibility == Visibility.Visible && ModuleActions.Content is not null ? Visibility.Visible : Visibility.Collapsed;
@@ -411,6 +421,25 @@ internal partial class ControlCenterWindow : Window
         RemoveDpiButton.Visibility = File.Exists(AppPaths.GeDpiLibrary) ? Visibility.Visible : Visibility.Collapsed;
         UpdateDeviceNames();
         if (_deviceOptions.Length > 0) RefreshModuleDevice();
+    }
+
+    private void ModuleChanged(object? sender, EventArgs e) => UpdateHidState();
+    private void ModuleSaveChanged(object? sender, EventArgs e)
+    {
+        if (DpiPage.Visibility == Visibility.Visible) SaveButton.IsEnabled = _attachedModule?.CanSave == true;
+    }
+    private void ModuleSettingsChanged(object? sender, EventArgs e) => UpdateDeviceNames();
+    private void DetachModule()
+    {
+        if (_attachedModule is not null)
+        {
+            _attachedModule.SaveAvailabilityChanged -= ModuleSaveChanged;
+            if (_attachedModule is IDeviceSettingsSource source) source.SettingsChanged -= ModuleSettingsChanged;
+        }
+        _attachedModule = null;
+        _moduleDevice = null;
+        DpiPage.Content = null;
+        ModuleActions.Content = null;
     }
     private void HistoryPlotSizeChanged(object sender, SizeChangedEventArgs e) => DrawHistory();
 

@@ -18,6 +18,30 @@ public class DpiProtocolTests
     ];
 
     [Fact]
+    public async Task AutomaticPollingWritesOnlyRateAndVerifiesReadback()
+    {
+        string[] after = [.. Captured];
+        after[4] = "00A100020201800108";
+        using var stream = new Replies([.. Captured, "00A1000202010001", .. after]);
+        Assert.Equal(Original with { PollingRate = 125 }, await WlMouseSettingsDriver.SetPolling(stream, 125, CancellationToken.None));
+        byte[] write = Assert.Single(stream.Requests, packet => packet[6] < 0x80);
+        Assert.Equal("000000020201000108", Convert.ToHexString(write.AsSpan(0, 9)));
+    }
+
+    [Fact]
+    public async Task PowerDisablesTurboBeforeHighSpeedAndVerifiesSleepTimer()
+    {
+        using var stream = new Replies(["00A1000201008501", "00A1000203008701012C", "00A1000202018B0101", "00A100020201930101",
+            "00A1000201008501", "00A1000203000701", "00A1000202011301", "00A1000202010B01",
+            "00A1000201008501", "00A10002030087010258", "00A1000202018B0100", "00A100020201930100"]);
+        Assert.Equal(new(600, 0), await WlMouseSettingsDriver.SavePower(stream, new(300, 2), new(600, 0), CancellationToken.None));
+        byte[][] writes = [.. stream.Requests.Where(packet => packet[6] < 0x80)];
+        Assert.Equal(new byte[] { 7, 0x13, 0x0B }, writes.Select(packet => packet[6]));
+        Assert.Equal(0, writes[0][5]);
+        Assert.Equal("0258", Convert.ToHexString(writes[0].AsSpan(8, 2)));
+    }
+
+    [Fact]
     public async Task ReadsHuanSettingsFromCapturedReplies()
     {
         using var stream = new Replies(Captured);

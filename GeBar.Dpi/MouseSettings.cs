@@ -17,3 +17,17 @@ public interface IMouseSettingsDriver
     Task<MouseSettings> ReadAsync(HidDeviceProfile device, CancellationToken token);
     Task<MouseSettings> SaveAsync(HidDeviceProfile device, MouseSettings expected, MouseSettings requested, CancellationToken token);
 }
+
+public interface IMousePollingDriver
+{
+    Task<MouseSettings> SetPollingAsync(HidDeviceProfile device, int pollingRate, CancellationToken token);
+}
+
+public sealed record MousePowerSettings(int SleepSeconds, int PerformanceMode);
+
+public interface IMousePowerDriver
+{
+    IReadOnlyList<int> PerformanceModes { get; }
+    Task<MousePowerSettings> ReadPowerAsync(HidDeviceProfile device, CancellationToken token);
+    Task<MousePowerSettings> SavePowerAsync(HidDeviceProfile device, MousePowerSettings expected, MousePowerSettings requested, CancellationToken token);
+}

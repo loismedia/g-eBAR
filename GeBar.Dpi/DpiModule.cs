@@ -10,7 +10,7 @@ using System.Windows.Automation;
 
 namespace GeBar.Dpi;
 
-public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
+public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource, IBackgroundSettingsModule
 {
     private readonly IAppLogger _logger;
     private readonly Func<IMouseSettingsDriver>[] _drivers;
@@ -23,6 +23,15 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
     private readonly Button _refresh = new() { Width = 36, Height = 36, Padding = new(0), ToolTip = Strings.Read,
         Content = new TextBlock { Text = "\uE72C", FontFamily = new FontFamily("Segoe Fluent Icons"), FontSize = 16 } };
     private readonly StackPanel _fields = new();
+    private readonly StackPanel _powerFields = new();
+    private readonly ComboBox _sleep = new() { Width = 112, DisplayMemberPath = "Label", SelectedValuePath = "Value" };
+    private readonly ComboBox _performance = new() { Width = 112, DisplayMemberPath = "Label", SelectedValuePath = "Value" };
+    private readonly CheckBox _smartEnabled = new() { Content = Strings.EnableSmartSaver };
+    private readonly CheckBox _notifyGame = new() { Content = Strings.NotifyGame };
+    private readonly TextBlock _smartStatus = new() { Margin = new(16, 0, 16, 12) };
+    private readonly TextBlock _powerHint = new() { Margin = new(16, 8, 16, 12), FontSize = 12 };
+    private readonly SmartSaver _smartSaver;
+    private MousePowerSettings? _power;
     private CancellationTokenSource? _readLifetime;
     private HidDeviceProfile? _device;
     private IMouseSettingsDriver? _driver;
@@ -37,20 +46,25 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
 
     public DpiModule(IAppLogger logger) : this(logger, [() => new WlMouseSettingsDriver(logger), () => new WaizowlSettingsDriver(logger)]) { }
 
-    internal DpiModule(IAppLogger logger, IMouseSettingsDriver[] drivers)
-        : this(logger, drivers.Select(driver => new Func<IMouseSettingsDriver>(() => driver)).ToArray()) { }
+    internal DpiModule(IAppLogger logger, IMouseSettingsDriver[] drivers, string? smartSaverPath = null, Func<bool>? fullscreen = null)
+        : this(logger, drivers.Select(driver => new Func<IMouseSettingsDriver>(() => driver)).ToArray(), smartSaverPath, fullscreen) { }
 
-    private DpiModule(IAppLogger logger, Func<IMouseSettingsDriver>[] drivers)
+    private DpiModule(IAppLogger logger, Func<IMouseSettingsDriver>[] drivers, string? smartSaverPath = null, Func<bool>? fullscreen = null)
     {
         _logger = logger;
         _drivers = drivers;
+        _smartSaver = new(logger, _requests, DriverFor,
+            smartSaverPath ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "g-eBAR", "smartsaver.json"), fullscreen ?? new FullscreenApplication().IsActive);
+        _smartSaver.Applied += (id, settings) =>
+        {
+            if (id != _device?.Id || _disposed) return;
+            _cache[id] = (settings, _driver!.Capabilities);
+            PublishSettings(settings);
+        };
+        _smartSaver.StateChanged += UpdateSmartStatus;
         var panel = new StackPanel();
-        var title = new TextBlock { Text = Strings.Title };
-        title.SetResourceReference(FrameworkElement.StyleProperty, "GroupHeader");
-        panel.Children.Add(title);
         panel.Children.Add(_deviceName);
         _deviceName.Margin = new(4, 0, 0, 12);
-        Grid.SetIsSharedSizeScope(_fields, true);
         AutomationProperties.SetName(_refresh, Strings.Read);
         _dpi.SetResourceReference(FrameworkElement.StyleProperty, "NumberBox");
         _range.SetResourceReference(TextBlock.ForegroundProperty, "SecondaryText");
@@ -60,9 +74,31 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
         _fields.Children.Add(Row(dpiLabel, _dpi, false));
         _fields.Children.Add(Row(new TextBlock { Text = Strings.Polling }, _polling, false));
         _fields.Children.Add(Row(new TextBlock { Text = Strings.Lod }, _lod, true));
-        var card = new Border { Child = _fields, HorizontalAlignment = HorizontalAlignment.Left };
-        card.SetResourceReference(FrameworkElement.StyleProperty, "Card");
-        panel.Children.Add(card);
+        var columns = new Grid { Margin = new(0, 0, 0, 16) };
+        columns.ColumnDefinitions.Add(new ColumnDefinition());
+        columns.ColumnDefinitions.Add(new ColumnDefinition { Width = new(12) });
+        columns.ColumnDefinitions.Add(new ColumnDefinition());
+        columns.Children.Add(Section(Strings.Title, _fields));
+        _powerFields.Children.Add(Row(new TextBlock { Text = Strings.Sleep }, _sleep, false));
+        _powerFields.Children.Add(Row(new TextBlock { Text = Strings.Performance }, _performance, true));
+        _powerHint.SetResourceReference(TextBlock.ForegroundProperty, "SecondaryText");
+        var powerPanel = new StackPanel();
+        powerPanel.Children.Add(_powerFields);
+        powerPanel.Children.Add(_powerHint);
+        FrameworkElement powerCard = Section(Strings.Power, powerPanel);
+        Grid.SetColumn(powerCard, 2);
+        columns.Children.Add(powerCard);
+        panel.Children.Add(columns);
+        var smartPanel = new StackPanel();
+        smartPanel.Children.Add(ToggleRow(_smartEnabled, false));
+        smartPanel.Children.Add(ToggleRow(_notifyGame, true));
+        smartPanel.Children.Add(new TextBlock { Text = Strings.SmartSaverHint, Margin = new(16, 4, 16, 8) });
+        var fullscreenHint = new TextBlock { Text = Strings.FullscreenHint, FontSize = 12, Margin = new(16, 0, 16, 8) };
+        fullscreenHint.SetResourceReference(TextBlock.ForegroundProperty, "SecondaryText");
+        smartPanel.Children.Add(fullscreenHint);
+        _smartStatus.SetResourceReference(TextBlock.ForegroundProperty, "SecondaryText");
+        smartPanel.Children.Add(_smartStatus);
+        panel.Children.Add(Section("SmartSaver", smartPanel));
         _status.SetResourceReference(TextBlock.ForegroundProperty, "SecondaryText");
         panel.Children.Add(_status);
         var scroll = new ScrollViewer { Content = panel };
@@ -72,6 +108,12 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
         _dpi.PreviewMouseWheel += DpiMouseWheel;
         _polling.SelectionChanged += (_, _) => Notify();
         _lod.SelectionChanged += (_, _) => Notify();
+        _sleep.SelectionChanged += (_, _) => Notify();
+        _performance.SelectionChanged += (_, _) => Notify();
+        _smartEnabled.Checked += (_, _) => Notify();
+        _smartEnabled.Unchecked += (_, _) => Notify();
+        _notifyGame.Checked += (_, _) => Notify();
+        _notifyGame.Unchecked += (_, _) => Notify();
         _refresh.Click += async (_, _) => await SetDeviceAsync(_device, CancellationToken.None);
         SetBusy(false);
     }
@@ -80,10 +122,24 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
     public string Version => typeof(DpiModule).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0] ?? "local";
     public FrameworkElement View { get; }
     public FrameworkElement Actions => _refresh;
-    public bool CanSave => !_disposed && !_busy && Requested() is MouseSettings requested && requested != _current;
+    public bool CanSave => !_disposed && !_busy && Requested() is MouseSettings requested
+        && (requested != _current || RequestedPower() != _power || RequestedSmart() != _smartSaver.Options(_device!.Id));
     public event EventHandler? SaveAvailabilityChanged;
     public DeviceSettingsSummary? CurrentSettings { get; private set; }
     public event EventHandler? SettingsChanged;
+    public event Action<string, string>? Notification
+    {
+        add => _smartSaver.Notification += value;
+        remove => _smartSaver.Notification -= value;
+    }
+
+    public Task StartAsync(IEnumerable<HidDeviceProfile> devices, CancellationToken token) => _smartSaver.StartAsync(devices, token);
+    public Task StopAsync(CancellationToken token)
+    {
+        Dispose();
+        return _smartSaver.StopAsync(token);
+    }
+    private IMouseSettingsDriver? DriverFor(HidDeviceProfile device) => _drivers.Select(create => create()).FirstOrDefault(driver => driver.Supports(device));
 
     public async Task SetDeviceAsync(HidDeviceProfile? device, CancellationToken token)
     {
@@ -94,12 +150,18 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
         CancellationToken cancellation = lifetime.Token;
         _device = device;
         _current = null;
-        _driver = device is null ? null : _drivers.Select(create => create()).FirstOrDefault(driver => driver.Supports(device));
+        _power = null;
+        _powerHint.Text = Strings.PowerUnavailable;
+        _sleep.ItemsSource = _performance.ItemsSource = null;
+        _driver = device is null ? null : DriverFor(device);
+        SmartSaverOptions options = device is null ? new() : _smartSaver.Options(device.Id);
+        _smartEnabled.IsChecked = options.Enabled;
+        _notifyGame.IsChecked = options.Notify;
         if (device is not null && _driver is not null && _cache.TryGetValue(device.Id, out var cached))
         {
-            _current = cached.Values;
+            _current = _smartSaver.Editor(device.Id, cached.Values, cached.Limits);
             ShowCapabilities(cached.Limits);
-            Show(cached.Values);
+            Show(_current);
             PublishSettings(cached.Values);
         }
         else
@@ -118,11 +180,26 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
             IMouseSettingsDriver driver = _driver;
             MouseSettings settings = await Request(() => driver.ReadAsync(device, cancellation), cancellation);
             if (lifetime.IsCancellationRequested || _disposed) return;
-            _current = settings;
+            _current = _smartSaver.Editor(device.Id, settings, driver.Capabilities);
             _cache[device.Id] = (settings, driver.Capabilities);
             ShowCapabilities(driver.Capabilities);
-            Show(settings);
+            Show(_current);
             PublishSettings(settings);
+            if (driver is IMousePowerDriver powerDriver)
+            {
+                try
+                {
+                    MousePowerSettings power = await Request(() => powerDriver.ReadPowerAsync(device, cancellation), cancellation);
+                    if (lifetime.IsCancellationRequested || _disposed) return;
+                    _power = power;
+                    ShowPower(powerDriver, power);
+                }
+                catch (Exception error) when (error is IOException or InvalidOperationException or UnauthorizedAccessException or NotSupportedException)
+                {
+                    _logger.Warning($"g-eDPI: power settings unavailable: {error.Message}");
+                }
+            }
+            _powerHint.Text = _power is null ? Strings.PowerUnavailable : Strings.PowerHint(((IMousePowerDriver)driver).PerformanceModes.Contains(2));
             _status.Text = Strings.Hint;
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
@@ -142,17 +219,39 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
         IMouseSettingsDriver driver = _driver;
         HidDeviceProfile device = _device;
         MouseSettings expected = _current;
+        MousePowerSettings? requestedPower = RequestedPower();
+        SmartSaverOptions requestedSmart = RequestedSmart();
         _saveGeneration++;
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token, _readLifetime?.Token ?? CancellationToken.None);
         SetBusy(true);
         try
         {
-            MouseSettings saved = await Request(() => driver.SaveAsync(device, expected, requested, lifetime.Token), lifetime.Token);
+            await _requests.WaitAsync(lifetime.Token);
+            try
+            {
+                MouseSettings physical = _smartSaver.Physical(device.Id, expected);
+                if (_smartSaver.Options(device.Id).Enabled && _smartSaver.Rate(device.Id) is null && _cache.TryGetValue(device.Id, out var cached))
+                    physical = expected with { PollingRate = cached.Values.PollingRate };
+                if (requested != expected)
+                    await Task.Run(() => driver.SaveAsync(device, physical, requested, lifetime.Token), lifetime.Token);
+                if (requestedPower is not null && driver is IMousePowerDriver powerDriver)
+                {
+                    if (requestedPower != _power)
+                        await Task.Run(() => powerDriver.SavePowerAsync(device, _power!, requestedPower, lifetime.Token), lifetime.Token);
+                    requestedPower = await Task.Run(() => powerDriver.ReadPowerAsync(device, lifetime.Token), lifetime.Token);
+                }
+                if (requestedSmart.Enabled || requestedSmart != _smartSaver.Options(device.Id))
+                    await _smartSaver.ConfigureAsync(device, driver, requestedSmart, lifetime.Token);
+            }
+            finally { _requests.Release(); }
             if (lifetime.IsCancellationRequested || _disposed) return false;
-            _current = saved;
-            _cache[device.Id] = (saved, driver.Capabilities);
-            Show(saved);
-            PublishSettings(saved);
+            _current = requested;
+            _power = requestedPower;
+            if (_power is not null && driver is IMousePowerDriver power) ShowPower(power, _power);
+            MouseSettings actual = _smartSaver.Physical(device.Id, requested);
+            _cache[device.Id] = (actual, driver.Capabilities);
+            Show(requested);
+            PublishSettings(actual);
             _status.Text = Strings.Hint;
             return true;
         }
@@ -180,6 +279,17 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
         return _driver.Capabilities.Accepts(settings) ? settings : null;
     }
 
+    private MousePowerSettings? RequestedPower() => _power is not null && _sleep.SelectedValue is int seconds && _performance.SelectedValue is int mode
+        ? new(seconds, mode) : _power;
+
+    private SmartSaverOptions RequestedSmart() => _device is null ? new() : _smartSaver.Options(_device.Id) with
+    {
+        Enabled = _smartEnabled.IsChecked == true,
+        Notify = _notifyGame.IsChecked == true,
+        NormalPollingRate = (_smartEnabled.IsChecked == true || _smartSaver.Options(_device.Id).Enabled) && _polling.SelectedValue is int rate
+            && (!_smartSaver.Options(_device.Id).Enabled || rate != _current?.PollingRate) ? rate : _smartSaver.Options(_device.Id).NormalPollingRate
+    };
+
     public async Task RefreshSettingsAsync(CancellationToken token)
     {
         if (_disposed || _busy || _refreshing || _driver is null || _device is null || _readLifetime is null) return;
@@ -195,9 +305,9 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
             _cache[device.Id] = (settings, driver.Capabilities);
             if (!_busy && _current is not null && Requested() == _current)
             {
-                _current = settings;
+                _current = _smartSaver.Editor(device.Id, settings, driver.Capabilities);
                 ShowCapabilities(driver.Capabilities);
-                Show(settings);
+                Show(_current);
                 Notify();
             }
             PublishSettings(settings);
@@ -250,7 +360,7 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
         e.Handled = true;
     }
 
-    private async Task<MouseSettings> Request(Func<Task<MouseSettings>> action, CancellationToken token)
+    private async Task<T> Request<T>(Func<Task<T>> action, CancellationToken token)
     {
         await _requests.WaitAsync(token);
         try { return await Task.Run(action, token); }
@@ -283,19 +393,68 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
     {
         _busy = busy;
         _fields.IsEnabled = !busy && _current is not null;
+        _powerFields.IsEnabled = !busy && _power is not null;
+        _smartEnabled.IsEnabled = !busy && _current is not null && _driver is IMousePollingDriver && _driver.Capabilities.PollingRates.Contains(125);
+        _notifyGame.IsEnabled = _smartEnabled.IsEnabled;
         _refresh.IsEnabled = !busy && _driver is not null;
         Notify();
     }
 
-    private void Notify() => SaveAvailabilityChanged?.Invoke(this, EventArgs.Empty);
+    private void Notify()
+    {
+        UpdateSmartStatus();
+        SaveAvailabilityChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void UpdateSmartStatus()
+    {
+        if (_disposed) return;
+        if (!View.Dispatcher.CheckAccess()) { View.Dispatcher.BeginInvoke(UpdateSmartStatus); return; }
+        _smartStatus.Text = _driver is not IMousePollingDriver ? Strings.SmartSaverUnsupported
+            : _device is not null && _smartSaver.Options(_device.Id).Enabled
+                ? _smartSaver.Error(_device.Id) ?? (_smartSaver.Rate(_device.Id) is not int rate ? Strings.Loading
+                    : rate == 125 ? Strings.Saving : Strings.GameRate(rate))
+                : Strings.SmartSaverOff;
+    }
+
+    private void ShowPower(IMousePowerDriver driver, MousePowerSettings power)
+    {
+        _sleep.ItemsSource = new[] { 30, 60, 120, 300, 600, 900, power.SleepSeconds }.Distinct().Order()
+            .Select(seconds => new Choice<int>(seconds, Strings.SleepDuration(seconds))).ToArray();
+        _performance.ItemsSource = driver.PerformanceModes.Select(mode => new Choice<int>(mode, mode switch { 1 => "High-Speed", 2 => "Turbo", _ => Strings.Normal })).ToArray();
+        _sleep.SelectedValue = power.SleepSeconds;
+        _performance.SelectedValue = power.PerformanceMode;
+    }
+
+    private static FrameworkElement Section(string heading, FrameworkElement content)
+    {
+        var panel = new Grid();
+        panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        panel.RowDefinitions.Add(new RowDefinition());
+        var title = new TextBlock { Text = heading };
+        title.SetResourceReference(FrameworkElement.StyleProperty, "GroupHeader");
+        panel.Children.Add(title);
+        var card = new Border { Child = content };
+        card.SetResourceReference(FrameworkElement.StyleProperty, "Card");
+        Grid.SetRow(card, 1);
+        panel.Children.Add(card);
+        return panel;
+    }
+
+    private static Border ToggleRow(CheckBox toggle, bool last)
+    {
+        var row = new Border { Child = toggle };
+        row.SetResourceReference(FrameworkElement.StyleProperty, last ? "LastRow" : "Row");
+        return row;
+    }
 
     private static Border Row(FrameworkElement label, FrameworkElement input, bool last)
     {
         var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto, SharedSizeGroup = "DpiLabels" });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto, SharedSizeGroup = "DpiValues" });
+        grid.ColumnDefinitions.Add(new ColumnDefinition());
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         label.VerticalAlignment = input.VerticalAlignment = VerticalAlignment.Center;
-        input.HorizontalAlignment = HorizontalAlignment.Left;
+        input.HorizontalAlignment = HorizontalAlignment.Right;
         label.Margin = new(0, 0, 16, 0);
         grid.Children.Add(label);
         Grid.SetColumn(input, 1);
@@ -309,6 +468,8 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource
     {
         if (_disposed) return;
         _disposed = true;
+        SetBusy(true);
+        _smartSaver.Cancel();
         _readLifetime?.Cancel();
         _readLifetime?.Dispose();
     }

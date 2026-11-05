@@ -10,6 +10,44 @@ public class WaizowlSettingsTests
 {
     private static readonly MouseSettings Original = new(800, 1000, 1);
 
+    [Fact]
+    public async Task AutomaticPollingPreservesSensorPacketAndDoesNotWriteFlash()
+    {
+        MouseSettings requested = Original with { PollingRate = 125 };
+        byte[] before = Sensor(Original, 29);
+        using var stream = new Firmware([Receiver("F4070000"), Status(Original), before, Packet(0x44, 2),
+            Receiver("F4070000"), Status(requested), Sensor(requested, 29)]);
+        var driver = new WaizowlSettingsDriver(new Logger());
+        Assert.Equal(requested, await driver.SetPolling(stream, 0x0728, 125, CancellationToken.None));
+        Assert.DoesNotContain(stream.Requests, packet => packet[1] is 0x4A or 0x0A);
+        byte[] write = Assert.Single(stream.Requests, packet => packet[1] == 0x44 && packet[4] == 2);
+        for (int index = 0; index < 64; index++)
+            if (index is not (4 or 6)) Assert.Equal(before[index], write[index]);
+        Assert.Equal(0xA1, write.Sum(value => value) & 0xFF);
+    }
+
+    [Theory]
+    [InlineData("F2070000", 37, 44)]
+    [InlineData("F4070000", 29, 36)]
+    [InlineData("B0070000", 44, 51)]
+    public async Task PowerUsesModelSpecificSleepOffsetAndPreservesOtherSettings(string model, int lodOffset, int sleepOffset)
+    {
+        byte[] before = Sensor(Original, lodOffset);
+        BinaryPrimitives.WriteUInt16LittleEndian(before.AsSpan(sleepOffset, 2), 300);
+        before[5] |= 0x40;
+        byte[] after = [.. before];
+        BinaryPrimitives.WriteUInt16LittleEndian(after.AsSpan(sleepOffset, 2), 600);
+        after[5] &= 0xBF;
+        using var stream = new Firmware([Receiver(model), Status(Original), before, Packet(0x44, 2), Receiver(model), Status(Original), after]);
+        var driver = new WaizowlSettingsDriver(new Logger());
+        Assert.Equal(new(600, 0), await driver.SavePower(stream, 0x0728, new(300, 1), new(600, 0), CancellationToken.None));
+        byte[] write = Assert.Single(stream.Requests, packet => packet[1] == 0x44 && packet[4] == 2);
+        for (int index = 0; index < 64; index++)
+            if (index != 4 && index != 5 && index != sleepOffset && index != sleepOffset + 1) Assert.Equal(before[index], write[index]);
+        Assert.Equal(0xA1, write.Sum(value => value) & 0xFF);
+        Assert.Contains(stream.Requests, packet => packet[1] == 0x4A);
+    }
+
     [Theory]
     [InlineData("F2070000", 37, 26000)]
     [InlineData("F4070000", 29, 30000)]

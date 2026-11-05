@@ -53,9 +53,19 @@ public class DpiModuleTests
                 DependencyObject[] elements = [.. Descendants(module.View)];
 
                 Assert.Same(window.FindResource("PageScroll"), ((ScrollViewer)module.View).Style);
-                Assert.Contains(elements.OfType<Border>(), border => ReferenceEquals(border.Style, window.FindResource("Card")));
+                Border[] cards = [.. elements.OfType<Border>().Where(border => ReferenceEquals(border.Style, window.FindResource("Card")))];
+                Assert.Equal(3, cards.Length);
+                Assert.InRange(Math.Abs(cards[0].ActualWidth - cards[1].ActualWidth), 0, 1);
+                Assert.InRange(Math.Abs(cards[0].ActualHeight - cards[1].ActualHeight), 0, 1);
                 Assert.Same(window.FindResource("NumberBox"), Assert.Single(elements.OfType<TextBox>()).Style);
-                Assert.Equal(2, elements.OfType<ComboBox>().Count());
+                Assert.Equal(4, elements.OfType<ComboBox>().Count());
+                TextBox dpi = elements.OfType<TextBox>().Single();
+                foreach (ComboBox combo in elements.OfType<ComboBox>().Take(2))
+                {
+                    double dpiRight = dpi.TranslatePoint(new(dpi.ActualWidth, 0), module.View).X;
+                    double comboRight = combo.TranslatePoint(new(combo.ActualWidth, 0), module.View).X;
+                    Assert.InRange(Math.Abs(dpiRight - comboRight), 0, 1);
+                }
                 Assert.Empty(elements.OfType<Button>());
                 Assert.IsType<Button>(module.Actions);
                 Assert.False(module.CanSave);
@@ -74,7 +84,7 @@ public class DpiModuleTests
 
         Assert.False(driver.Supports(unsupported));
         Assert.True(driver.Supports(huan));
-        Assert.False(driver.Supports(huan with { ProductId = 0xA863 }));
+        Assert.True(driver.Supports(huan with { ProductId = 0xA863 }));
     }
 
     private static IEnumerable<DependencyObject> Descendants(DependencyObject root)

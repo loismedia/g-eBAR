@@ -4,11 +4,67 @@ using HidSharp;
 
 namespace GeBar.Dpi;
 
-public sealed class WlMouseSettingsDriver(IAppLogger logger) : IMouseSettingsDriver
+public sealed class WlMouseSettingsDriver(IAppLogger logger) : IMouseSettingsDriver, IMousePollingDriver, IMousePowerDriver
 {
     public MouseSettingsCapabilities Capabilities { get; } = new(50, 30000, 50, [125, 250, 500, 1000, 2000, 4000, 8000], [0.7, 1, 2]);
 
-    public bool Supports(HidDeviceProfile device) => device.AllConnections().Any(connection => connection.VendorId == 0x36A7 && connection.ProductId == 0xA864);
+    public bool Supports(HidDeviceProfile device) => device.AllConnections().Any(connection => connection.VendorId == 0x36A7 && connection.ProductId is 0xA864 or 0xA863);
+
+    public IReadOnlyList<int> PerformanceModes => [0, 1, 2];
+
+    public Task<MouseSettings> SetPollingAsync(HidDeviceProfile device, int pollingRate, CancellationToken token) =>
+        UseDevice(device, (stream, cancellation) => SetPolling(stream, pollingRate, cancellation), token);
+
+    internal static async Task<MouseSettings> SetPolling(HidStream stream, int pollingRate, CancellationToken token)
+    {
+        byte rate = EncodePolling(pollingRate);
+        Snapshot current = await ReadSnapshot(stream, token).ConfigureAwait(false);
+        if (current.Settings.PollingRate == pollingRate) return current.Settings;
+        await Exchange(stream, Request(2, 0, 1, current.Profile, rate), token).ConfigureAwait(false);
+        MouseSettings actual = await Read(stream, token).ConfigureAwait(false);
+        if (actual != current.Settings with { PollingRate = pollingRate }) throw new IOException(Strings.VerificationFailed);
+        return actual;
+    }
+
+    public Task<MousePowerSettings> ReadPowerAsync(HidDeviceProfile device, CancellationToken token) =>
+        UseDevice(device, ReadPower, token, true);
+
+    public Task<MousePowerSettings> SavePowerAsync(HidDeviceProfile device, MousePowerSettings expected, MousePowerSettings requested, CancellationToken token) =>
+        UseDevice(device, (stream, cancellation) => SavePower(stream, expected, requested, cancellation), token);
+
+    internal static async Task<MousePowerSettings> ReadPower(HidStream stream, CancellationToken token)
+    {
+        byte profile = (await Exchange(stream, Request(1, 0x85, 0), token).ConfigureAwait(false))[7];
+        if (profile is < 1 or > 3) throw new InvalidDataException(Strings.InvalidResponse);
+        byte[] sleep = await Exchange(stream, Request(3, 0x87, 0, profile), token).ConfigureAwait(false);
+        byte high = (await Exchange(stream, Request(2, 0x8B, 1, profile), token).ConfigureAwait(false))[8];
+        byte turbo = (await Exchange(stream, Request(2, 0x93, 1, profile), token).ConfigureAwait(false))[8];
+        int seconds = sleep[8] << 8 | sleep[9];
+        if (seconds == 0 || high > 1 || turbo > 1 || turbo == 1 && high == 0) throw new InvalidDataException(Strings.InvalidResponse);
+        return new(seconds, turbo == 1 ? 2 : high);
+    }
+
+    internal static async Task<MousePowerSettings> SavePower(HidStream stream, MousePowerSettings expected, MousePowerSettings requested, CancellationToken token)
+    {
+        if (requested.SleepSeconds is < 1 or > 65535 || requested.PerformanceMode is < 0 or > 2) throw new ArgumentOutOfRangeException(nameof(requested));
+        MousePowerSettings current = await ReadPower(stream, token).ConfigureAwait(false);
+        if (current != expected) throw new InvalidOperationException(Strings.ChangedExternally);
+        byte profile = (await Exchange(stream, Request(1, 0x85, 0), token).ConfigureAwait(false))[7];
+        if (profile is < 1 or > 3) throw new InvalidDataException(Strings.InvalidResponse);
+        if (requested.SleepSeconds != current.SleepSeconds)
+            await Exchange(stream, Request(3, 7, 0, profile, (byte)(requested.SleepSeconds >> 8), (byte)requested.SleepSeconds), token).ConfigureAwait(false);
+        if (requested.PerformanceMode != current.PerformanceMode)
+        {
+            if (current.PerformanceMode == 2)
+                await Exchange(stream, Request(2, 0x13, 1, profile, 0), token).ConfigureAwait(false);
+            await Exchange(stream, Request(2, 0x0B, 1, profile, (byte)(requested.PerformanceMode == 0 ? 0 : 1)), token).ConfigureAwait(false);
+            if (requested.PerformanceMode == 2)
+                await Exchange(stream, Request(2, 0x13, 1, profile, 1), token).ConfigureAwait(false);
+        }
+        MousePowerSettings actual = await ReadPower(stream, token).ConfigureAwait(false);
+        if (actual != requested) throw new IOException(Strings.VerificationFailed);
+        return actual;
+    }
 
     public Task<MouseSettings> ReadAsync(HidDeviceProfile device, CancellationToken token) => UseDevice(device, (stream, cancellation) => Read(stream, cancellation), token, true);
 
@@ -38,11 +94,11 @@ public sealed class WlMouseSettingsDriver(IAppLogger logger) : IMouseSettingsDri
         return actual;
     }
 
-    private async Task<MouseSettings> UseDevice(HidDeviceProfile profile, Func<HidStream, CancellationToken, Task<MouseSettings>> action, CancellationToken token, bool readOnly = false)
+    private async Task<T> UseDevice<T>(HidDeviceProfile profile, Func<HidStream, CancellationToken, Task<T>> action, CancellationToken token, bool readOnly = false)
     {
         if (!Supports(profile)) throw new NotSupportedException(Strings.Unsupported);
         foreach (HidDeviceConnectionProfile connection in profile.AllConnections().Where(connection => connection.VendorId == 0x36A7 && connection.ProductId is 0xA864 or 0xA863)
-            .OrderBy(connection => connection.ProductId == 0xA864 ? 0 : 1))
+            .OrderBy(connection => connection.ProductId == 0xA863 ? 0 : 1))
         {
             foreach (HidDevice handle in DeviceList.Local.GetHidDevices(connection.VendorId, connection.ProductId))
             {

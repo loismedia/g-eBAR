@@ -16,6 +16,77 @@ public class DeviceSettingsSummaryTests
 {
     private static readonly HidDeviceProfile Device = new("mouse-a", "Mouse A", 0xFFFF, 0xFFFF, null, null, [], new());
 
+    [Fact]
+    public void SmartSaverDoesNotReplaceSelectedRateAndDisablingRestoresIt() => Sta(async () =>
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"gebar-smart-ui-{Guid.NewGuid():N}");
+        var driver = new Driver();
+        using var module = new DpiModule(new Logger(), [driver], Path.Combine(directory, "smart.json"), () => false);
+        try
+        {
+            await module.SetDeviceAsync(Device, CancellationToken.None);
+            DependencyObject[] elements = [.. Descendants(module.View)];
+            CheckBox enabled = elements.OfType<CheckBox>().First();
+            CheckBox notify = elements.OfType<CheckBox>().Last();
+            ComboBox polling = elements.OfType<ComboBox>().First();
+            Assert.False(module.CanSave);
+            Assert.False(notify.IsChecked);
+            enabled.IsChecked = true;
+            Assert.True(module.CanSave);
+            Assert.True(await module.SaveAsync(CancellationToken.None));
+            Assert.Equal(125, driver.Settings.PollingRate);
+            Assert.Equal(1000, polling.SelectedValue);
+            Assert.Equal(125, module.CurrentSettings!.PollingRate);
+            Assert.False(module.CanSave);
+            int saves = driver.Saves;
+            notify.IsChecked = true;
+            Assert.True(await module.SaveAsync(CancellationToken.None));
+            Assert.Equal(saves, driver.Saves);
+            Assert.Equal(125, driver.Settings.PollingRate);
+            elements.OfType<TextBox>().Single().Text = "1200";
+            Assert.True(await module.SaveAsync(CancellationToken.None));
+            Assert.Equal(new(1200, 125, 1), driver.Settings);
+            await module.RefreshSettingsAsync(CancellationToken.None);
+            Assert.Equal(1000, polling.SelectedValue);
+            enabled.IsChecked = false;
+            Assert.True(await module.SaveAsync(CancellationToken.None));
+            Assert.Equal(new(1200, 1000, 1), driver.Settings);
+            Assert.False(module.CanSave);
+        }
+        finally
+        {
+            await module.StopAsync(CancellationToken.None);
+            if (Directory.Exists(directory)) Directory.Delete(directory, true);
+        }
+    });
+
+    [Fact]
+    public void ClosingAndReopeningWindowKeepsSharedModuleAliveAndDetachesItsView() => Sta(async () =>
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"gebar-shared-module-{Guid.NewGuid():N}");
+        using var loader = new SettingsModuleLoader();
+        var driver = new Driver();
+        using var module = new DpiModule(new Logger(), [driver], Path.Combine(directory, "smart.json"), () => false);
+        typeof(SettingsModuleLoader).GetProperty(nameof(SettingsModuleLoader.Module))!.SetValue(loader, module);
+        ControlCenterWindow? first = null, second = null;
+        try
+        {
+            first = new(new(), false, string.Empty, new FileLogger(directory, "test"), moduleLoader: loader);
+            Assert.Same(module.View, ((ContentControl)first.FindName("DpiPage")).Content);
+            first.Close();
+            Assert.Null(((ContentControl)first.FindName("DpiPage")).Content);
+            second = new(new(), false, string.Empty, new FileLogger(directory, "test"), moduleLoader: loader);
+            Assert.Same(module.View, ((ContentControl)second.FindName("DpiPage")).Content);
+            await module.SetDeviceAsync(Device, CancellationToken.None);
+            Assert.Equal(800, module.CurrentSettings!.Dpi);
+        }
+        finally
+        {
+            first?.Close(); second?.Close();
+            if (Directory.Exists(directory)) Directory.Delete(directory, true);
+        }
+    });
+
     [Theory]
     [InlineData("ru-RU")]
     [InlineData("en-US")]
@@ -195,12 +266,12 @@ public class DeviceSettingsSummaryTests
         if (failure is not null) ExceptionDispatchInfo.Capture(failure).Throw();
     }
 
-    private sealed class Driver : IMouseSettingsDriver
+    private sealed class Driver : IMouseSettingsDriver, IMousePollingDriver
     {
         public TaskCompletionSource? ReadReady { get; set; }
         public MouseSettings Settings { get; set; } = new(800, 1000, 1);
         public int Saves { get; private set; }
-        public MouseSettingsCapabilities Capabilities { get; } = new(50, 30000, 50, [1000], [1, 2]);
+        public MouseSettingsCapabilities Capabilities { get; } = new(50, 30000, 50, [125, 1000], [1, 2]);
         public bool Supports(HidDeviceProfile device) => device.Id != "unsupported";
         public async Task<MouseSettings> ReadAsync(HidDeviceProfile device, CancellationToken token)
         {
@@ -209,10 +280,13 @@ public class DeviceSettingsSummaryTests
         }
         public Task<MouseSettings> SaveAsync(HidDeviceProfile device, MouseSettings expected, MouseSettings requested, CancellationToken token)
         {
+            if (Settings != expected) throw new InvalidOperationException();
             Saves++;
             Settings = requested;
             return Task.FromResult(Settings);
         }
+        public Task<MouseSettings> SetPollingAsync(HidDeviceProfile device, int pollingRate, CancellationToken token) =>
+            Task.FromResult(Settings = Settings with { PollingRate = pollingRate });
     }
 
     private sealed class SummaryModule : ISettingsModule, IDeviceSettingsSource

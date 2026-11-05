@@ -33,6 +33,8 @@ internal sealed class BatteryTrayApplicationContext
     private TrayIconVisual? _iconVisual;
     private string? _tooltip;
     private ControlCenterWindow? _window;
+    private readonly SettingsModuleLoader _moduleLoader = new();
+    private IBackgroundSettingsModule? _backgroundModule;
     private DeviceBatteryState _lastState = DeviceBatteryState.Missing;
     private bool _closing;
     private bool _startupGraceElapsed;
@@ -136,6 +138,7 @@ internal sealed class BatteryTrayApplicationContext
     }
     private async Task StartAsync()
     {
+        await UpdateSettingsModuleAsync();
         foreach ((string id, IDeviceBatteryMonitor monitor) in _monitors)
         {
             try { await monitor.StartAsync(_lifetime.Token); }
@@ -441,6 +444,7 @@ internal sealed class BatteryTrayApplicationContext
         }
         await SynchronizeBackgroundMonitorsAsync();
         _monitor = _monitors[_settings.SelectedDeviceId];
+        await UpdateSettingsModuleAsync();
         UpdateUi(_monitor.CurrentState);
         RebuildTrayDeviceMenu();
         _window?.SetDevices(_devices.Select(entry => (entry.Id, entry.Name)).ToArray(), _settings.SelectedDeviceId);
@@ -508,14 +512,42 @@ internal sealed class BatteryTrayApplicationContext
         await CheckUpdatesAsync(true, channel);
     }
 
-    private void ShowAvailableUpdate()
+    private async void ShowAvailableUpdate()
     {
         if (_availableRelease is null) return;
         var form = new UpdateWindow(_availableRelease, _updates, _logger);
         form.ShowDialog();
         if (form.InstallStarted) { _ = ExitAsync(); return; }
+        await UpdateSettingsModuleAsync();
         _window?.UpdateHidState();
     }
+
+    private async Task UpdateSettingsModuleAsync()
+    {
+        if (_closing) return;
+        try
+        {
+            await _moduleLoader.ReloadAsync(GitHubUpdateService.DpiModulePath, _logger,
+                _devices.Select(device => device.Profile).OfType<HidDeviceProfile>(), _lifetime.Token);
+        }
+        catch (OperationCanceledException) when (_closing) { return; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException or NotSupportedException)
+        {
+            _logger.Error("Cannot start background settings module", error);
+            return;
+        }
+        if (ReferenceEquals(_backgroundModule, _moduleLoader.Module)) return;
+        if (_backgroundModule is not null) _backgroundModule.Notification -= ModuleNotification;
+        _backgroundModule = _moduleLoader.Module as IBackgroundSettingsModule;
+        if (_backgroundModule is not null) _backgroundModule.Notification += ModuleNotification;
+    }
+
+    private void ModuleNotification(string title, string message) => _uiContext.Post(_ =>
+    {
+        if (_closing) return;
+        _updateBalloonActive = false;
+        ShowAppBalloon(title, message);
+    }, null);
     private void LaunchHid()
     {
         try { GitHubUpdateService.LaunchHid(); }
@@ -611,6 +643,12 @@ internal sealed class BatteryTrayApplicationContext
         _lifetime.Cancel(); _tray.Hide();
         try
         {
+            if (_moduleLoader.Module is IBackgroundSettingsModule background)
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                try { await background.StopAsync(timeout.Token); }
+                catch (OperationCanceledException) { _logger.Warning("SmartSaver shutdown timed out"); }
+            }
             await Task.WhenAll(_monitors.Values.Select(monitor => monitor.DisposeAsync().AsTask())).WaitAsync(TimeSpan.FromSeconds(4));
         }
         catch (Exception ex)
@@ -623,6 +661,7 @@ internal sealed class BatteryTrayApplicationContext
             SystemEvents.DisplaySettingsChanged -= OnDisplayChanged;
             SystemEvents.SessionSwitch -= OnSessionSwitch;
             _window?.Close(); _profileWatcher?.Dispose(); _tray.Dispose(); _updates.Dispose(); _lifetime.Dispose();
+            _moduleLoader.Dispose();
             System.Windows.Application.Current.Shutdown();
         }
     }
@@ -631,12 +670,13 @@ internal sealed class BatteryTrayApplicationContext
     {
         if (_window is not null) return _window;
         _window = new ControlCenterWindow(_settings, _diagnosticsMode, _updates.Token, _logger,
-            id => _devices.FirstOrDefault(entry => entry.Id == id)?.Profile);
+            id => _devices.FirstOrDefault(entry => entry.Id == id)?.Profile, _moduleLoader);
         _window.Closed += (_, _) => _window = null;
         _window.OpenLogsRequested += (_, _) => OpenLogs();
         _window.CheckUpdatesRequested += async (_, _) => await CheckUpdatesAsync(true);
         _window.HidLaunchRequested += (_, _) => LaunchHid();
         _window.HidRemoveRequested += (_, _) => RemoveHid();
+        _window.DpiRemoveRequested += async (_, _) => await UpdateSettingsModuleAsync();
         _window.BugReportRequested += ReportBug;
         _window.ChangelogRequested += async (_, _) => await UpdateWindow.ShowChangelogAsync(_window!, _updates, _logger, null);
         _window.GitHubTokenChanged += SaveGitHubToken;

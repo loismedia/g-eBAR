@@ -5,13 +5,61 @@ using HidSharp;
 
 namespace GeBar.Dpi;
 
-public sealed class WaizowlSettingsDriver(IAppLogger logger) : IMouseSettingsDriver
+public sealed class WaizowlSettingsDriver(IAppLogger logger) : IMouseSettingsDriver, IMousePollingDriver, IMousePowerDriver
 {
     private readonly Func<int, int, IEnumerable<HidDevice>> _devices = (vendor, product) => DeviceList.Local.GetHidDevices(vendor, product);
 
     internal WaizowlSettingsDriver(IAppLogger logger, Func<int, int, IEnumerable<HidDevice>> devices) : this(logger) => _devices = devices;
 
     public MouseSettingsCapabilities Capabilities { get; private set; } = Limits(true, 30000);
+    public IReadOnlyList<int> PerformanceModes => [0, 1];
+
+    public Task<MouseSettings> SetPollingAsync(HidDeviceProfile device, int pollingRate, CancellationToken token) =>
+        UseDevice(device, (stream, product, cancellation) => SetPolling(stream, product, pollingRate, cancellation), token);
+
+    internal async Task<MouseSettings> SetPolling(Stream stream, int product, int pollingRate, CancellationToken token)
+    {
+        Snapshot current = await ReadSnapshot(stream, product, token, logger).ConfigureAwait(false);
+        MouseSettings requested = current.Settings with { PollingRate = pollingRate };
+        if (requested == current.Settings) return requested;
+        await Exchange(stream, WriteRequest(current, requested), token, logger).ConfigureAwait(false);
+        Snapshot actual = await ReadSnapshot(stream, product, token, logger).ConfigureAwait(false);
+        if (actual.Settings != requested || actual.Layout != current.Layout) throw new IOException(Strings.VerificationFailed);
+        return actual.Settings;
+    }
+
+    public Task<MousePowerSettings> ReadPowerAsync(HidDeviceProfile device, CancellationToken token) =>
+        UseDevice(device, async (stream, product, cancellation) => Power(await ReadSnapshot(stream, product, cancellation, logger).ConfigureAwait(false)), token, true);
+
+    public Task<MousePowerSettings> SavePowerAsync(HidDeviceProfile device, MousePowerSettings expected, MousePowerSettings requested, CancellationToken token) =>
+        UseDevice(device, (stream, product, cancellation) => SavePower(stream, product, expected, requested, cancellation), token);
+
+    internal static MousePowerSettings Power(Snapshot snapshot)
+    {
+        int offset = SleepOffset(snapshot.Layout);
+        int seconds = BinaryPrimitives.ReadUInt16LittleEndian(snapshot.Packet.AsSpan(offset, 2));
+        if (seconds == 0) throw new InvalidDataException(Strings.InvalidResponse);
+        return new(seconds, (snapshot.Packet[5] & 0x40) == 0 ? 0 : 1);
+    }
+
+    private static int SleepOffset(ModelLayout layout) => layout.LodOffset switch { 29 => 36, 37 => 44, 44 => 51, _ => throw new NotSupportedException(Strings.Unsupported) };
+
+    internal async Task<MousePowerSettings> SavePower(Stream stream, int product, MousePowerSettings expected, MousePowerSettings requested, CancellationToken token)
+    {
+        if (requested.SleepSeconds is < 1 or > 65535 || requested.PerformanceMode is < 0 or > 1) throw new ArgumentOutOfRangeException(nameof(requested));
+        Snapshot current = await ReadSnapshot(stream, product, token, logger).ConfigureAwait(false);
+        if (Power(current) != expected) throw new InvalidOperationException(Strings.ChangedExternally);
+        byte[] write = [.. current.Packet];
+        write[4] = 2;
+        BinaryPrimitives.WriteUInt16LittleEndian(write.AsSpan(SleepOffset(current.Layout), 2), (ushort)requested.SleepSeconds);
+        write[5] = (byte)((write[5] & ~0x40) | (requested.PerformanceMode == 1 ? 0x40 : 0));
+        Checksum(write);
+        await Exchange(stream, write, token, logger).ConfigureAwait(false);
+        await Flash(stream, product, token).ConfigureAwait(false);
+        Snapshot actual = await ReadSnapshot(stream, product, token, logger).ConfigureAwait(false);
+        if (Power(actual) != requested || actual.Settings != current.Settings || actual.Layout != current.Layout) throw new IOException(Strings.VerificationFailed);
+        return Power(actual);
+    }
 
     public bool Supports(HidDeviceProfile device) => device.AllConnections().Any(connection => connection.VendorId == 0x1915 && SupportedProduct(connection.ProductId));
 
@@ -36,16 +84,18 @@ public sealed class WaizowlSettingsDriver(IAppLogger logger) : IMouseSettingsDri
         if (requested == expected) return expected;
         byte[] write = WriteRequest(current, requested);
         await Exchange(stream, write, token, logger).ConfigureAwait(false);
-        byte[] flash = Request(product == 0x0728 ? (byte)0x4A : (byte)0x0A, 1);
-        using (IDisposable? access = stream is HidStream hid ? await HidDeviceAccess.EnterAsync(hid.Device.DevicePath, token).ConfigureAwait(false) : null)
-        {
-            await stream.WriteAsync(flash, token).ConfigureAwait(false);
-            await Task.Delay(60, token).ConfigureAwait(false);
-        }
+        await Flash(stream, product, token).ConfigureAwait(false);
         Snapshot actual = await ReadSnapshot(stream, product, token, logger).ConfigureAwait(false);
         if (actual.Settings != requested || actual.Layout != current.Layout) throw new IOException(Strings.VerificationFailed);
         logger.Info($"g-eDPI: Waizowl settings verified, model={actual.Layout.Name}, DPI={actual.Settings.Dpi}, polling={actual.Settings.PollingRate} Hz, LOD={actual.Settings.Lod} mm");
         return actual.Settings;
+    }
+
+    private static async Task Flash(Stream stream, int product, CancellationToken token)
+    {
+        using IDisposable? access = stream is HidStream hid ? await HidDeviceAccess.EnterAsync(hid.Device.DevicePath, token).ConfigureAwait(false) : null;
+        await stream.WriteAsync(Request(product == 0x0728 ? (byte)0x4A : (byte)0x0A, 1), token).ConfigureAwait(false);
+        await Task.Delay(60, token).ConfigureAwait(false);
     }
 
     internal sealed record ModelLayout(string Name, int LodOffset, int MaximumDpi);
@@ -172,7 +222,7 @@ public sealed class WaizowlSettingsDriver(IAppLogger logger) : IMouseSettingsDri
         throw new IOException(Strings.Unavailable);
     }
 
-    private async Task<MouseSettings> UseDevice(HidDeviceProfile device, Func<HidStream, int, CancellationToken, Task<MouseSettings>> action, CancellationToken token, bool readOnly = false)
+    private async Task<T> UseDevice<T>(HidDeviceProfile device, Func<HidStream, int, CancellationToken, Task<T>> action, CancellationToken token, bool readOnly = false)
     {
         if (!Supports(device)) throw new NotSupportedException(Strings.Unsupported);
         bool attempted = false;

@@ -7,7 +7,32 @@ namespace GeBar.App;
 internal sealed class SettingsModuleLoader : IDisposable
 {
     private ModuleContext? _context;
+    private readonly SemaphoreSlim _reloads = new(1, 1);
     public ISettingsModule? Module { get; private set; }
+    public event EventHandler? Changed;
+
+    public async Task ReloadAsync(string path, FileLogger logger, IEnumerable<GeBar.Core.HidDeviceProfile> devices, CancellationToken token)
+    {
+        await _reloads.WaitAsync(token);
+        try
+        {
+            if (Module?.Version != GitHubUpdateService.GetInstalledDpiVersion())
+            {
+                if (Module is IBackgroundSettingsModule previous)
+                {
+                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                    try { await previous.StopAsync(timeout.Token); }
+                    catch (OperationCanceledException) { logger.Warning("Settings module shutdown timed out"); }
+                }
+                Dispose();
+                token.ThrowIfCancellationRequested();
+                Load(path, logger);
+                Changed?.Invoke(this, EventArgs.Empty);
+            }
+            if (Module is IBackgroundSettingsModule background) await background.StartAsync(devices, token);
+        }
+        finally { _reloads.Release(); }
+    }
 
     public void Load(string path, FileLogger logger)
     {
