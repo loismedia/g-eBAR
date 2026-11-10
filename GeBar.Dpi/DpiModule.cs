@@ -29,7 +29,7 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource, IBackgro
     private readonly CheckBox _smartEnabled = new() { Content = Strings.EnableSmartSaver };
     private readonly CheckBox _notifyGame = new() { Content = Strings.NotifyGame };
     private readonly TextBlock _smartStatus = new() { Margin = new(16, 0, 16, 12) };
-    private readonly TextBlock _powerHint = new() { Margin = new(16, 8, 16, 12), FontSize = 12 };
+    private readonly TextBlock _powerHint = new() { TextWrapping = TextWrapping.Wrap, FontSize = 12 };
     private readonly SmartSaver _smartSaver;
     private MousePowerSettings? _power;
     private CancellationTokenSource? _readLifetime;
@@ -55,12 +55,7 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource, IBackgro
         _drivers = drivers;
         _smartSaver = new(logger, _requests, DriverFor,
             smartSaverPath ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "g-eBAR", "smartsaver.json"), fullscreen ?? new FullscreenApplication().IsActive);
-        _smartSaver.Applied += (id, settings) =>
-        {
-            if (id != _device?.Id || _disposed) return;
-            _cache[id] = (settings, _driver!.Capabilities);
-            PublishSettings(settings);
-        };
+        _smartSaver.Applied += ApplySettings;
         _smartSaver.StateChanged += UpdateSmartStatus;
         var panel = new StackPanel();
         panel.Children.Add(_deviceName);
@@ -75,16 +70,22 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource, IBackgro
         _fields.Children.Add(Row(new TextBlock { Text = Strings.Polling }, _polling, false));
         _fields.Children.Add(Row(new TextBlock { Text = Strings.Lod }, _lod, true));
         var columns = new Grid { Margin = new(0, 0, 0, 16) };
+        Grid.SetIsSharedSizeScope(columns, true);
         columns.ColumnDefinitions.Add(new ColumnDefinition());
         columns.ColumnDefinitions.Add(new ColumnDefinition { Width = new(12) });
         columns.ColumnDefinitions.Add(new ColumnDefinition());
         columns.Children.Add(Section(Strings.Title, _fields));
-        _powerFields.Children.Add(Row(new TextBlock { Text = Strings.Sleep }, _sleep, false));
-        _powerFields.Children.Add(Row(new TextBlock { Text = Strings.Performance }, _performance, true));
+        ShareRowHeight((Border)_fields.Children[0], "DpiSleep");
+        var sleepRow = Row(new TextBlock { Text = Strings.Sleep }, _sleep, false);
+        ShareRowHeight(sleepRow, "DpiSleep");
+        _powerFields.Children.Add(sleepRow);
+        _powerFields.Children.Add(Row(new TextBlock { Text = Strings.Performance }, _performance, false));
         _powerHint.SetResourceReference(TextBlock.ForegroundProperty, "SecondaryText");
         var powerPanel = new StackPanel();
         powerPanel.Children.Add(_powerFields);
-        powerPanel.Children.Add(_powerHint);
+        var hintRow = new Border { Child = _powerHint };
+        hintRow.SetResourceReference(FrameworkElement.StyleProperty, "LastRow");
+        powerPanel.Children.Add(hintRow);
         FrameworkElement powerCard = Section(Strings.Power, powerPanel);
         Grid.SetColumn(powerCard, 2);
         columns.Children.Add(powerCard);
@@ -92,8 +93,8 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource, IBackgro
         var smartPanel = new StackPanel();
         smartPanel.Children.Add(ToggleRow(_smartEnabled, false));
         smartPanel.Children.Add(ToggleRow(_notifyGame, true));
-        smartPanel.Children.Add(new TextBlock { Text = Strings.SmartSaverHint, Margin = new(16, 4, 16, 8) });
-        var fullscreenHint = new TextBlock { Text = Strings.FullscreenHint, FontSize = 12, Margin = new(16, 0, 16, 8) };
+        smartPanel.Children.Add(new TextBlock { Text = Strings.SmartSaverHint, TextWrapping = TextWrapping.Wrap, Margin = new(16, 4, 16, 8) });
+        var fullscreenHint = new TextBlock { Text = Strings.FullscreenHint, TextWrapping = TextWrapping.Wrap, FontSize = 12, Margin = new(16, 0, 16, 8) };
         fullscreenHint.SetResourceReference(TextBlock.ForegroundProperty, "SecondaryText");
         smartPanel.Children.Add(fullscreenHint);
         _smartStatus.SetResourceReference(TextBlock.ForegroundProperty, "SecondaryText");
@@ -126,6 +127,7 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource, IBackgro
         && (requested != _current || RequestedPower() != _power || RequestedSmart() != _smartSaver.Options(_device!.Id));
     public event EventHandler? SaveAvailabilityChanged;
     public DeviceSettingsSummary? CurrentSettings { get; private set; }
+    public bool SmartSaverActive { get; private set; }
     public event EventHandler? SettingsChanged;
     public event Action<string, string>? Notification
     {
@@ -370,9 +372,21 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource, IBackgro
     private void PublishSettings(MouseSettings? settings)
     {
         DeviceSettingsSummary? summary = settings is null || _device is null ? null : new(_device.Id, settings.Dpi, settings.PollingRate, settings.Lod);
-        if (CurrentSettings == summary) return;
+        bool smartSaverActive = summary is not null && _smartSaver.Options(summary.DeviceId).Enabled
+            && _smartSaver.Error(summary.DeviceId) is null && _smartSaver.Rate(summary.DeviceId) == summary.PollingRate;
+        if (CurrentSettings == summary && SmartSaverActive == smartSaverActive) return;
         CurrentSettings = summary;
+        SmartSaverActive = smartSaverActive;
         SettingsChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void ApplySettings(string id, MouseSettings settings)
+    {
+        if (_disposed) return;
+        if (!View.Dispatcher.CheckAccess()) { View.Dispatcher.BeginInvoke(() => ApplySettings(id, settings)); return; }
+        if (id != _device?.Id || _driver is null) return;
+        _cache[id] = (settings, _driver.Capabilities);
+        PublishSettings(settings);
     }
 
     private void Show(MouseSettings settings)
@@ -410,6 +424,7 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource, IBackgro
     {
         if (_disposed) return;
         if (!View.Dispatcher.CheckAccess()) { View.Dispatcher.BeginInvoke(UpdateSmartStatus); return; }
+        if (_device is not null && _cache.TryGetValue(_device.Id, out var cached)) PublishSettings(cached.Values);
         _smartStatus.Text = _driver is not IMousePollingDriver ? Strings.SmartSaverUnsupported
             : _device is not null && _smartSaver.Options(_device.Id).Enabled
                 ? _smartSaver.Error(_device.Id) ?? (_smartSaver.Rate(_device.Id) is not int rate ? Strings.Loading
@@ -421,7 +436,7 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource, IBackgro
     {
         _sleep.ItemsSource = new[] { 30, 60, 120, 300, 600, 900, power.SleepSeconds }.Distinct().Order()
             .Select(seconds => new Choice<int>(seconds, Strings.SleepDuration(seconds))).ToArray();
-        _performance.ItemsSource = driver.PerformanceModes.Select(mode => new Choice<int>(mode, mode switch { 1 => "High-Speed", 2 => "Turbo", _ => Strings.Normal })).ToArray();
+        _performance.ItemsSource = driver.PerformanceModes.Select(mode => new Choice<int>(mode, mode switch { 1 => "Speed", 2 => "Turbo", _ => Strings.Normal })).ToArray();
         _sleep.SelectedValue = power.SleepSeconds;
         _performance.SelectedValue = power.PerformanceMode;
     }
@@ -446,6 +461,12 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource, IBackgro
         var row = new Border { Child = toggle };
         row.SetResourceReference(FrameworkElement.StyleProperty, last ? "LastRow" : "Row");
         return row;
+    }
+
+    private static void ShareRowHeight(Border row, string group)
+    {
+        var grid = (Grid)row.Child;
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto, SharedSizeGroup = group });
     }
 
     private static Border Row(FrameworkElement label, FrameworkElement input, bool last)
