@@ -95,6 +95,7 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
             }
             Dictionary<(int Vendor, int Product), HidDevice[]> live = LiveHandles();
             Retopologize(live);
+            StartListener(cancellationToken);
             ConnectionScan scan = await ScanConnectionsAsync(live, cancellationToken).ConfigureAwait(false);
             _resolved = scan.Protocol ?? _resolved;
             HidBatteryReading? reading = scan.Reading ?? ReadBluetooth();
@@ -164,7 +165,7 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
     {
         bool anyHandles = scan.AnyHandles;
         DeviceBatteryState? published;
-        if (scan.Asleep)
+        if (scan.Asleep || anyHandles && _offSince is not null)
         {
             lock (_state) published = Asleep();
             Announce(published);
@@ -189,6 +190,8 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
 
     private DeviceBatteryState? Asleep()
     {
+        _failures = 0;
+        _diagnostics = _diagnostics with { LastError = null };
         _trend.Clear();
         _lastLevel = null;
         return Commit(DeviceConnectionState.DeviceOff, CurrentState.Percentage ?? _lastKnown, false, CurrentState.LastSuccessfulRead);
@@ -393,7 +396,7 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
     {
         if (_failures > 0 && _failures <= RetryDelays.Length) return RetryDelays[_failures - 1];
         if (_failures > 0 && Settling) return RetryDelays[^1];
-        bool cheapToRetry = _resolved is not null && CurrentState.ConnectionState is
+        bool cheapToRetry = (_resolved is not null || profile.AllConnections().Any(connection => connection.Battery.RequestKind != HidRequestKind.None)) && CurrentState.ConnectionState is
             DeviceConnectionState.DeviceOff or DeviceConnectionState.Reading or DeviceConnectionState.ReadError;
         return cheapToRetry && interval > SleepPoll ? SleepPoll : interval;
     }
@@ -526,8 +529,11 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
         StopListener();
         _listeningPath = statusPath;
         _listenerLifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
-        _listener = ListenAsync(connection, battery, statusPath, _listenerGeneration, _listenerLifetime.Token);
+        _listener = ListenAsync(StatusConnection(statusPath, connection), battery, statusPath, _listenerGeneration, _listenerLifetime.Token);
     }
+
+    private HidDeviceConnectionProfile StatusConnection(string path, HidDeviceConnectionProfile fallback) => profile.AllConnections()
+        .FirstOrDefault(connection => connection.Interfaces.Any(item => item.DevicePath.Equals(path, StringComparison.OrdinalIgnoreCase))) ?? fallback;
 
     private Task StopListener()
     {
