@@ -62,6 +62,7 @@ internal sealed class BatteryTrayApplicationContext
         _menu.Items.Add(MenuCommand(Strings.Exit, async () => await ExitAsync()));
         _tray = new TrayIcon(Strings.AppName) { Menu = _menu };
         _tray.DoubleClicked += (_, _) => ShowMain();
+        _tray.BalloonShown += (title, _) => _updateBalloonActive = title == Strings.NewVersion;
         _tray.BalloonClicked += (_, _) => { if (_updateBalloonActive) { _updateBalloonActive = false; ShowAvailableUpdate(); } };
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
         SystemEvents.DisplaySettingsChanged += OnDisplayChanged;
@@ -268,7 +269,7 @@ internal sealed class BatteryTrayApplicationContext
         settings.AutoSwitchDevice && startupGraceElapsed
         && states.TryGetValue(settings.SelectedDeviceId, out DeviceBatteryState? own) && Gone(own)
             ? devices.FirstOrDefault(id => !string.Equals(id, settings.SelectedDeviceId, StringComparison.OrdinalIgnoreCase)
-                && states.TryGetValue(id, out DeviceBatteryState? other) && !Gone(other) && other.Percentage is not null)
+                && states.TryGetValue(id, out DeviceBatteryState? other) && other.ConnectionState == DeviceConnectionState.DeviceConnected && other.Percentage is not null)
             : null;
 
     private async Task SaveAutoSelectionAsync(AppSettings settings)
@@ -277,8 +278,8 @@ internal sealed class BatteryTrayApplicationContext
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { _logger.Error("Automatic device selection save failed", ex); }
     }
 
-    private static bool Gone(DeviceBatteryState state) => state.ConnectionState == DeviceConnectionState.DeviceNotFound
-        || state.ConnectionState == DeviceConnectionState.DeviceOff && state.Percentage is null;
+    private static bool Gone(DeviceBatteryState state) => state.ConnectionState is
+        DeviceConnectionState.DeviceNotFound or DeviceConnectionState.DeviceOff or DeviceConnectionState.ReadError;
 
     private void UpdateUi(DeviceBatteryState state)
     {
@@ -349,7 +350,6 @@ internal sealed class BatteryTrayApplicationContext
     };
     private void ShowNotification(BatteryNotificationKind kind, int percentage, string? deviceName)
     {
-        _updateBalloonActive = false;
         string text = kind switch
         {
             BatteryNotificationKind.Critical => Strings.CriticalNotice(percentage),
@@ -500,7 +500,6 @@ internal sealed class BatteryTrayApplicationContext
             else if (!string.Equals(_notifiedRelease, release.Tag, StringComparison.Ordinal))
             {
                 _notifiedRelease = release.Tag;
-                _updateBalloonActive = true;
                 ShowAppBalloon(Strings.NewVersion, Strings.AvailableVersion(release.Version.ToString()));
             }
         }, null);
@@ -545,8 +544,7 @@ internal sealed class BatteryTrayApplicationContext
     private void ModuleNotification(string title, string message) => _uiContext.Post(_ =>
     {
         if (_closing) return;
-        _updateBalloonActive = false;
-        ShowAppBalloon(title, message);
+        _tray.ShowBalloon(title, message, false);
     }, null);
     private void LaunchHid()
     {

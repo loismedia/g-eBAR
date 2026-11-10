@@ -339,8 +339,9 @@ internal partial class ControlCenterWindow : Window
 
     private void UpdateDeviceNames()
     {
-        DeviceSettingsSummary? summary = (_moduleLoader.Module as IDeviceSettingsSource)?.CurrentSettings;
-        string? parameters = summary?.DeviceId == Value.SelectedDeviceId ? summary.Display : null;
+        IDeviceSettingsSource? source = _moduleLoader.Module as IDeviceSettingsSource;
+        DeviceSettingsSummary? summary = source?.CurrentSettings;
+        string? parameters = summary?.DeviceId == Value.SelectedDeviceId ? summary.Format(source!.SmartSaverActive) : null;
         DeviceNameText.Text = FormatDeviceName(_deviceOptions.FirstOrDefault(option => option.Id == Value.SelectedDeviceId).Name ?? _deviceDisplayName ?? Strings.DefaultDevice, parameters);
         if (_deviceOptions.Length == 0) return;
         string[] names = [.. _deviceOptions.Select(option => FormatDeviceName(option.Name, option.Id == Value.SelectedDeviceId ? parameters : null))];
