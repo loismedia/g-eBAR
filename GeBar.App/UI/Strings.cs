@@ -10,6 +10,9 @@ internal static class Strings
     public static string AppName => "g-eBAR";
     public static string HidName => "g-eHID";
     public static string Modules => Ru ? "Модули" : "Modules";
+    public static string ModuleImpactHint => Ru
+        ? "[Транзитивный] Общий компонент для сборки/оптимизации модулей."
+        : "[Transitive] Сommon component for building/optimizing modules.";
     public static string DpiReleaseUnavailable => Ru ? "g-eDPI недоступен в этом релизе" : "g-eDPI is unavailable in this release";
     public static string ModulesInstalled => Ru ? "Модули установлены." : "Modules have been installed.";
     public static string RemoveDpi => Ru ? "Удалить g-eDPI" : "Remove g-eDPI";

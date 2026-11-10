@@ -413,15 +413,29 @@ internal partial class ControlCenterWindow : Window
                 else RefreshModuleDevice();
             }
         }
-        var modules = new List<string>();
-        if (version is not null) modules.Add(Strings.HidVersion(version));
-        if (dpiVersion is not null) modules.Add($"g-eDPI {dpiVersion}");
+        IReadOnlyList<ModuleInfo> modules = ModuleEntries(version, dpiVersion);
         ModulesList.ItemsSource = modules;
         ModulesPanel.Visibility = modules.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         RemoveHidButton.Visibility = version is null ? Visibility.Collapsed : Visibility.Visible;
         RemoveDpiButton.Visibility = File.Exists(AppPaths.GeDpiLibrary) ? Visibility.Visible : Visibility.Collapsed;
         UpdateDeviceNames();
         if (_deviceOptions.Length > 0) RefreshModuleDevice();
+    }
+
+    internal sealed record ModuleInfo(string Text, string? ToolTip = null);
+
+    internal static IReadOnlyList<ModuleInfo> ModuleEntries(string? hidVersion, string? dpiVersion)
+    {
+        var modules = new List<ModuleInfo>();
+        if (hidVersion is not null) modules.Add(new(Strings.HidVersion(hidVersion)));
+        if (dpiVersion is not null) modules.Add(new($"g-eDPI {dpiVersion}"));
+        if (modules.Count > 0)
+        {
+            string version = typeof(ControlCenterWindow).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
+                .FirstOrDefault(attribute => attribute.Key == "ModuleImpactVersion")?.Value ?? "?";
+            modules.Add(new($"ModuleImpact {version}", Strings.ModuleImpactHint));
+        }
+        return modules;
     }
 
     private void ModuleChanged(object? sender, EventArgs e) => UpdateHidState();

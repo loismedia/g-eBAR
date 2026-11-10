@@ -12,6 +12,24 @@ namespace GeBar.Tests;
 public class DpiModuleTests
 {
     [Fact]
+    public void BuildComponentAppearsOnceWithAnyInstalledModule()
+    {
+        Assert.Empty(ControlCenterWindow.ModuleEntries(null, null));
+        foreach ((string? hid, string? dpi, string[] expected) in new (string?, string?, string[])[]
+        {
+            ("hid-version", null, ["g-eHID hid-version", "ModuleImpact 10.300.1"]),
+            (null, "dpi-version", ["g-eDPI dpi-version", "ModuleImpact 10.300.1"]),
+            ("hid-version", "dpi-version", ["g-eHID hid-version", "g-eDPI dpi-version", "ModuleImpact 10.300.1"])
+        })
+        {
+            IReadOnlyList<ControlCenterWindow.ModuleInfo> entries = ControlCenterWindow.ModuleEntries(hid, dpi);
+            Assert.Equal(expected, entries.Select(entry => entry.Text));
+            Assert.Equal(GeBar.App.Strings.ModuleImpactHint, entries[^1].ToolTip);
+            Assert.All(entries.Take(entries.Count - 1), entry => Assert.Null(entry.ToolTip));
+        }
+    }
+
+    [Fact]
     public void OptionalModuleLoadsWithoutLockingItsFileAndUsesSharedUiContract() => Sta(() =>
     {
         string directory = Path.Combine(Path.GetTempPath(), $"gebar-dpi-{Guid.NewGuid():N}");

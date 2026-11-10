@@ -266,7 +266,7 @@
                             <ItemsControl x:Name="ModulesList">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding}" TextAlignment="Center" Margin="0,4,0,0" Foreground="{DynamicResource SecondaryText}"/>
+                                        <TextBlock Text="{Binding Text}" ToolTip="{Binding ToolTip}" TextAlignment="Center" Margin="0,4,0,0" Foreground="{DynamicResource SecondaryText}"/>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>

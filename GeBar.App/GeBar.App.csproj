@@ -15,5 +15,6 @@
     <Copy SourceFiles="..\GeBar.Dpi\bin\$(Configuration)\$(TargetFramework)\g-eDPI.dll" DestinationFolder="$(TargetDir)modules" SkipUnchangedFiles="true" Condition="Exists('..\GeBar.Dpi\bin\$(Configuration)\$(TargetFramework)\g-eDPI.dll')" />
   </Target>
   <ItemGroup><AssemblyMetadata Include="Publisher" Value="Lois Media" /><AssemblyMetadata Include="Developer" Value="lucz" /></ItemGroup>
+  <ItemGroup><AssemblyMetadata Include="ModuleImpactVersion" Value="$(ModuleImpactVersion)" /></ItemGroup>
   <ItemGroup Condition="'$(RepositoryUrl)' != ''"><AssemblyMetadata Include="RepositoryUrl" Value="$(RepositoryUrl)" /></ItemGroup>
 </Project>
