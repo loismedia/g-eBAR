@@ -6,4 +6,5 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup><ProjectReference Include="..\GeBar.Core\GeBar.Core.csproj" /></ItemGroup>
+  <ItemGroup><InternalsVisibleTo Include="GeBar.Tests" /></ItemGroup>
 </Project>

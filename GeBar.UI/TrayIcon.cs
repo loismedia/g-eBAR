@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Interop;
+using System.Windows.Threading;
 
 namespace GeBar.UI;
 
@@ -10,12 +11,16 @@ public sealed partial class TrayIcon : IDisposable
     private const int CallbackMessage = 0x8000 + 1;
     private const uint Add = 0, Modify = 1, Delete = 2;
     private const uint HasMessage = 0x01, HasIcon = 0x02, HasTip = 0x04, HasBalloon = 0x10;
+    private const uint InfoIcon = 0x01, RespectQuietTime = 0x80;
+    private const int AcceptsNotifications = 5;
     private const int LeftDoubleClick = 0x0203, RightButtonUp = 0x0205, BalloonClick = 0x0405;
     private const int PopupWindow = unchecked((int)0x80000000);
     public const int TooltipLimit = 127;
 
     private readonly HwndSource _window;
     private readonly int _taskbarCreated;
+    private readonly DeferredNotifications _notifications;
+    private readonly DispatcherTimer _notificationTimer;
     private NotifyIconData _data;
     private IntPtr _icon;
     private bool _hidden;
@@ -24,6 +29,7 @@ public sealed partial class TrayIcon : IDisposable
     public ContextMenu? Menu { get; set; }
     public event EventHandler? DoubleClicked;
     public event EventHandler? BalloonClicked;
+    public event Action<string, string>? BalloonShown;
 
     public TrayIcon(string tooltip)
     {
@@ -42,6 +48,13 @@ public sealed partial class TrayIcon : IDisposable
             szInfoTitle = string.Empty
         };
         Send(Add);
+        _notifications = new(() => SHQueryUserNotificationState(out int state) < 0 || state == AcceptsNotifications, SendBalloon);
+        _notificationTimer = new() { Interval = TimeSpan.FromSeconds(5) };
+        _notificationTimer.Tick += (_, _) =>
+        {
+            _notifications.Flush();
+            if (!_notifications.Pending) _notificationTimer.Stop();
+        };
     }
 
     public string Tooltip
@@ -66,16 +79,37 @@ public sealed partial class TrayIcon : IDisposable
         if (previous != IntPtr.Zero) DestroyIcon(previous);
     }
 
-    public void ShowBalloon(string title, string text)
+    public void ShowBalloon(string title, string text) => ShowBalloon(title, text, true);
+
+    public void ShowBalloon(string title, string text, bool defer)
+    {
+        if (_disposed) return;
+        _notifications.Add(title, text, defer);
+        if (!_notificationTimer.IsEnabled) _notifications.Flush();
+        if (_notifications.Pending) _notificationTimer.Start();
+    }
+
+    private bool SendBalloon(string title, string text)
     {
         uint flags = _data.uFlags;
         _data.uFlags = flags | HasBalloon;
         _data.szInfoTitle = Trim(title, 63);
         _data.szInfo = Trim(text, 255);
-        Update();
+        _data.dwInfoFlags = InfoIcon | RespectQuietTime;
+        bool sent = Send(Modify);
+        if (!sent && !_hidden)
+        {
+            _data.uFlags = flags;
+            Send(Add);
+            _data.uFlags = flags | HasBalloon;
+            sent = Send(Modify);
+        }
         _data.uFlags = flags;
         _data.szInfoTitle = string.Empty;
         _data.szInfo = string.Empty;
+        _data.dwInfoFlags = 0;
+        if (sent) BalloonShown?.Invoke(title, text);
+        return sent;
     }
 
     public void Hide()
@@ -138,6 +172,7 @@ public sealed partial class TrayIcon : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        _notificationTimer.Stop();
         Hide();
         if (_icon != IntPtr.Zero) DestroyIcon(_icon);
         _window.RemoveHook(OnMessage);
@@ -167,6 +202,9 @@ public sealed partial class TrayIcon : IDisposable
     [LibraryImport("shell32.dll", EntryPoint = "Shell_NotifyIconW", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool ShellNotifyIcon(uint message, IntPtr data);
+
+    [LibraryImport("shell32.dll")]
+    private static partial int SHQueryUserNotificationState(out int state);
 
     [LibraryImport("user32.dll", EntryPoint = "RegisterWindowMessageW", StringMarshalling = StringMarshalling.Utf16)]
     private static partial uint RegisterWindowMessage(string message);
