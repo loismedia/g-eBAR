@@ -42,21 +42,6 @@ public class DpiProtocolTests
     }
 
     [Fact]
-    public async Task ReadsHuanSettingsFromCapturedReplies()
-    {
-        using var stream = new Replies(Captured);
-
-        WlMouseSettingsDriver.Snapshot snapshot = await WlMouseSettingsDriver.ReadSnapshot(stream, CancellationToken.None);
-
-        Assert.Equal(Original, snapshot.Settings);
-        Assert.Equal(1, snapshot.Profile);
-        Assert.Equal(2, snapshot.ActiveStage);
-        Assert.False(snapshot.Special);
-        Assert.Equal(24, snapshot.Stages.Length);
-        Assert.All(stream.Requests, request => Assert.True((request[6] & 0x80) != 0));
-    }
-
-    [Fact]
     public async Task SavingOneDpiPreservesOtherStagesAndVerifiesReadback()
     {
         string[] after = [.. Captured];

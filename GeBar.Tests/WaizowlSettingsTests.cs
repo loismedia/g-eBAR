@@ -265,11 +265,8 @@ public class WaizowlSettingsTests
 
     private static byte[] LogPacket(string prefix, string checksum = "00") => Convert.FromHexString(prefix.PadRight(128, '0') + checksum);
 
-    [Theory]
-    [InlineData(0xFF00)]
-    [InlineData(0xFF0A)]
-    [InlineData(0xFF31)]
-    public async Task DeviceEntryPointReadsAndSavesThroughVendorInterface(int usagePage)
+    [Fact]
+    public async Task DeviceEntryPointReadsAndSavesThroughVendorInterface()
     {
         var requested = Original with { PollingRate = 2000 };
         using var firmware = new Firmware([
@@ -280,7 +277,7 @@ public class WaizowlSettingsTests
         var keyboard = new TestDevice("keyboard-" + Guid.NewGuid(), firmware);
         var mouse = new TestDevice("vendor-" + Guid.NewGuid(), firmware);
         HidDeviceProfile profile = new("ogm", "OGM 8K", 0x1915, 0x0728, null, null,
-            [new(keyboard.DevicePath, 65, 65, 0, 1), new(mouse.DevicePath, 65, 65, 0, usagePage)],
+            [new(keyboard.DevicePath, 65, 65, 0, 1), new(mouse.DevicePath, 65, 65, 0, 0xFF31)],
             Battery(mouse.DevicePath));
         var driver = new WaizowlSettingsDriver(new Logger(), (_, _) => [keyboard, mouse]);
 
@@ -315,6 +312,8 @@ public class WaizowlSettingsTests
     [InlineData(null, 65, 65, false, false)]
     [InlineData(null, 65, 65, true, true)]
     [InlineData(0xFF00, 65, 65, false, true)]
+    [InlineData(0xFF0A, 65, 65, false, true)]
+    [InlineData(0xFF31, 65, 65, false, true)]
     public void InterfaceSelectionRequiresVendorReportsOrVerifiedProtocol(int? usagePage, int input, int output, bool known, bool expected)
     {
         HidBatteryProtocolProfile battery = known ? Battery("device") : new();

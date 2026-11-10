@@ -85,6 +85,50 @@ public class MonitorRecoveryTests
         Assert.Equal(2, device.Reads);
     }
 
+    [Fact]
+    public async Task LearnedSleepSurvivesEmptyReadsAndWakesAfterFreeze()
+    {
+        var device = new Mouse(0xFFFE, "receiver") { Reply = Packet("00A10002020083001A") };
+        HidDeviceProfile profile = Profile(device) with { Battery = Protocol(device) };
+        await using var monitor = Monitor(profile);
+        await Refresh(monitor, device);
+        typeof(ProfileBatteryMonitor).GetField("_offSince", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(monitor, DateTimeOffset.Now);
+        typeof(ProfileBatteryMonitor).GetField("_offPercentage", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(monitor, 26);
+        typeof(ProfileBatteryMonitor).GetField("_probes", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(monitor,
+            new Dictionary<(int, int), (int, DateTimeOffset)> { [(device.VendorID, device.ProductID)] = (0, DateTimeOffset.Now.AddMinutes(30)) });
+        device.Reply = new byte[65];
+
+        for (int attempt = 0; attempt < 4; attempt++) await Refresh(monitor, device);
+
+        Assert.Equal(DeviceConnectionState.DeviceOff, monitor.CurrentState.ConnectionState);
+        Assert.Equal(26, monitor.CurrentState.Percentage);
+        Assert.Null(monitor.Diagnostics.LastError);
+        Assert.Equal(TimeSpan.FromSeconds(30), Delay(monitor));
+        await Refresh(monitor, device);
+        Assert.Equal(DeviceConnectionState.DeviceOff, monitor.CurrentState.ConnectionState);
+
+        device.Reply = Packet("00A10002020083001A");
+        await Refresh(monitor, device);
+        Assert.Equal(DeviceConnectionState.DeviceOff, monitor.CurrentState.ConnectionState);
+        typeof(ProfileBatteryMonitor).GetField("_offSince", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(monitor, DateTimeOffset.Now.AddMinutes(-11));
+        await Refresh(monitor, device);
+        Assert.Equal(DeviceConnectionState.DeviceConnected, monitor.CurrentState.ConnectionState);
+        Assert.Equal(26, monitor.CurrentState.Percentage);
+        Assert.Null(monitor.Diagnostics.ProbingPaused);
+    }
+
+    [Fact]
+    public async Task StatusInterfaceCanBelongToAnotherConnection()
+    {
+        var device = new Mouse(0xFFFE, "battery");
+        var status = new HidDeviceConnectionProfile(0xFFFF, 0xFFFD, null, null, [new("status", 9, 0, 0)], new());
+        await using var monitor = Monitor(Profile(device) with { Connections = [status] });
+        HidDeviceConnectionProfile fallback = Profile(device).AllConnections().First();
+
+        Assert.Equal(status, Method("StatusConnection").Invoke(monitor, ["STATUS", fallback]));
+        Assert.Same(fallback, Method("StatusConnection").Invoke(monitor, ["unknown", fallback]));
+    }
+
     [Theory]
     [InlineData(DeviceConnectionState.Reading, 300, true, 30)]
     [InlineData(DeviceConnectionState.ReadError, 300, true, 30)]

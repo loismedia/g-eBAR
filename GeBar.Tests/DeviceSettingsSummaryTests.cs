@@ -37,6 +37,7 @@ public class DeviceSettingsSummaryTests
             Assert.Equal(125, driver.Settings.PollingRate);
             Assert.Equal(1000, polling.SelectedValue);
             Assert.Equal(125, module.CurrentSettings!.PollingRate);
+            Assert.True(module.SmartSaverActive);
             Assert.False(module.CanSave);
             int saves = driver.Saves;
             notify.IsChecked = true;
@@ -51,6 +52,7 @@ public class DeviceSettingsSummaryTests
             enabled.IsChecked = false;
             Assert.True(await module.SaveAsync(CancellationToken.None));
             Assert.Equal(new(1200, 1000, 1), driver.Settings);
+            Assert.False(module.SmartSaverActive);
             Assert.False(module.CanSave);
         }
         finally
@@ -99,6 +101,7 @@ public class DeviceSettingsSummaryTests
             var summary = new DeviceSettingsSummary("mouse", 400, 1000, 1);
 
             Assert.Equal("Mouse (400dpi, 1000hz, 1.0mm)", ControlCenterWindow.FormatDeviceName("Mouse", summary.Display));
+            Assert.Equal("(400dpi, 1000hz (SS), 1.0mm)", summary.Format(true));
             Assert.Equal("Mouse", ControlCenterWindow.FormatDeviceName("Mouse", null));
         }
         finally { CultureInfo.CurrentCulture = previous; }

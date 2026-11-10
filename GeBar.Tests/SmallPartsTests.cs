@@ -49,7 +49,7 @@ public class SmallPartsTests
     }
 
     [Fact]
-    public void LogLinesReadWhileLoggerWrites()
+    public void OpenLogRemainsReadableAndRawPacketsRequireOptIn()
     {
         string directory = Path.Combine(Path.GetTempPath(), $"gebar-tests-{Guid.NewGuid():N}");
         try
@@ -57,27 +57,12 @@ public class SmallPartsTests
             var logger = new FileLogger(directory, "test");
             logger.Info("first");
             string file = Directory.GetFiles(directory, "*.log").Single();
-            using var writer = new FileStream(file, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
-
-            Assert.Contains(FileLogger.ReadLines(file), line => line.EndsWith("first", StringComparison.Ordinal));
-        }
-        finally
-        {
-            Directory.Delete(directory, true);
-        }
-    }
-
-    [Fact]
-    public void RawPacketsAreHiddenUnlessEnabled()
-    {
-        string directory = Path.Combine(Path.GetTempPath(), $"gebar-tests-{Guid.NewGuid():N}");
-        try
-        {
-            var logger = new FileLogger(directory, "test");
+            using (var writer = new FileStream(file, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
+                Assert.Contains(FileLogger.ReadLines(file), line => line.EndsWith("first", StringComparison.Ordinal));
             logger.Info("RX [65] 0041");
             logger.LogRawPackets = true;
             logger.Info("TX [65] 0041");
-            string[] lines = [.. FileLogger.ReadLines(Directory.GetFiles(directory, "*.log").Single())];
+            string[] lines = [.. FileLogger.ReadLines(file)];
 
             Assert.DoesNotContain(lines, line => line.Contains("RX [65]", StringComparison.Ordinal));
             Assert.Contains(lines, line => line.Contains("TX [65]", StringComparison.Ordinal));

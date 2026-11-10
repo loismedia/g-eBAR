@@ -8,19 +8,17 @@ public class DeviceAutoSwitchTests
     private static DeviceBatteryState State(DeviceConnectionState connection, int? percentage = null) =>
         new(connection, percentage, false, null, null);
 
-    [Theory]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    public void WaitsForStartupCheckAndRespectsDisabledSetting(bool startupGraceElapsed, bool enabled)
+    [Fact]
+    public void DisabledAutoSwitchKeepsSelection()
     {
         var states = new Dictionary<string, DeviceBatteryState>
         {
             ["selected"] = DeviceBatteryState.Missing,
             ["available"] = State(DeviceConnectionState.DeviceConnected, 75)
         };
-        var settings = new AppSettings(SelectedDeviceId: "selected", AutoSwitchDevice: enabled);
+        var settings = new AppSettings(SelectedDeviceId: "selected", AutoSwitchDevice: false);
 
-        Assert.Null(BatteryTrayApplicationContext.FindAutoSwitchTarget(["selected", "available"], states, settings, startupGraceElapsed));
+        Assert.Null(BatteryTrayApplicationContext.FindAutoSwitchTarget(["selected", "available"], states, settings, true));
     }
 
     [Fact]
@@ -39,12 +37,12 @@ public class DeviceAutoSwitchTests
 
     [Theory]
     [InlineData(DeviceConnectionState.DeviceConnected, 75, false)]
-    [InlineData(DeviceConnectionState.DeviceOff, 75, false)]
+    [InlineData(DeviceConnectionState.DeviceOff, 75, true)]
     [InlineData(DeviceConnectionState.Reading, 75, false)]
-    [InlineData(DeviceConnectionState.ReadError, null, false)]
+    [InlineData(DeviceConnectionState.ReadError, null, true)]
     [InlineData(DeviceConnectionState.DeviceNotFound, null, true)]
     [InlineData(DeviceConnectionState.DeviceOff, null, true)]
-    public void ReplacesMissingDeviceButKeepsSleepingDeviceWithKnownCharge(DeviceConnectionState connection, int? percentage, bool switches)
+    public void ReplacesUnavailableDeviceAfterStartupGrace(DeviceConnectionState connection, int? percentage, bool switches)
     {
         var states = new Dictionary<string, DeviceBatteryState>
         {
@@ -65,12 +63,15 @@ public class DeviceAutoSwitchTests
             ["removed"] = State(DeviceConnectionState.DeviceConnected, 90),
             ["missing"] = State(DeviceConnectionState.DeviceNotFound, 80),
             ["unknown"] = State(DeviceConnectionState.DeviceConnected),
+            ["sleeping"] = State(DeviceConnectionState.DeviceOff, 90),
+            ["reading"] = State(DeviceConnectionState.Reading, 90),
+            ["error"] = State(DeviceConnectionState.ReadError, 90),
             ["second"] = State(DeviceConnectionState.DeviceConnected, 60),
             ["first"] = State(DeviceConnectionState.DeviceConnected, 50)
         };
 
         Assert.Equal("first", BatteryTrayApplicationContext.FindAutoSwitchTarget(
-            ["selected", "missing", "unknown", "first", "second"], states, new AppSettings(SelectedDeviceId: "selected"), true));
+            ["selected", "missing", "unknown", "sleeping", "reading", "error", "first", "second"], states, new AppSettings(SelectedDeviceId: "selected"), true));
     }
 
     [Fact]

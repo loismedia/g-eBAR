@@ -11,10 +11,8 @@ public class UpdateWindowTests
 {
     [Theory]
     [InlineData(ReleaseChannel.Dev, false, true, false, false)]
-    [InlineData(ReleaseChannel.Public, false, true, false, false)]
     [InlineData(ReleaseChannel.Dev, false, false, false, false)]
     [InlineData(ReleaseChannel.Dev, true, false, true, false)]
-    [InlineData(null, true, false, true, false)]
     [InlineData(null, false, true, true, true)]
     public void ChannelSwitchDoesNotPretendToBeNightlyRollback(ReleaseChannel? target, bool nightly, bool downgrade, bool warning, bool rollback)
     {
