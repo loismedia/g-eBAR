@@ -26,10 +26,10 @@ internal partial class UpdateWindow : Window
         _service = service;
         _logger = logger;
         bool stableRollback = release.TargetChannel is null && release.IsDowngrade;
+        string version = GitHubUpdateService.VersionLabel(release.Version.ToString(), release.TargetChannel ?? BuildChannel.Current, release.IsNightly);
         Title = Strings.NewVersion;
-        AvailableText.Text = release.TargetChannel is ReleaseChannel target ? Strings.ChannelAvailable(target, release.Version.ToString()) : release.AppUpdateAvailable
-            ? release.IsDowngrade ? Strings.AvailableStableRollback(release.Version.ToString())
-                : release.IsNightly ? Strings.AvailableNightlyVersion(release.Version.ToString()) : Strings.AvailableVersion(release.Version.ToString())
+        AvailableText.Text = release.TargetChannel is ReleaseChannel target ? Strings.ChannelAvailable(target, version) : release.AppUpdateAvailable
+            ? release.IsDowngrade ? Strings.AvailableStableRollback(version) : Strings.AvailableVersion(version)
             : Strings.HidAvailableVersion(release.HidVersion ?? string.Empty);
         CurrentText.Text = Strings.CurrentVersion(GitHubUpdateService.CurrentVersionLabel);
         CurrentText.Visibility = release.AppUpdateAvailable ? Visibility.Visible : Visibility.Collapsed;

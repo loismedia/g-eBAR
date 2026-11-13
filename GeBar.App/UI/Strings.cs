@@ -64,7 +64,6 @@ internal static class Strings
     public static string CurrentVersion(string value) => Ru ? $"Текущая версия: {value}" : $"Current version: {value}";
     public static string AvailableVersion(string value) => Ru ? $"Доступна версия: {value}" : $"Available version: {value}";
     public static string Download => Ru ? "Установить обновление" : "Install update";
-    public static string AvailableNightlyVersion(string version) => Ru ? $"Доступна версия {version} nightly" : $"Version {version} nightly is available";
     public static string AvailableStableRollback(string version) => Ru ? $"Доступен откат на стабильную версию {version}" : $"Stable rollback {version} is available";
     public static string NightlyWarning => Ru ? "Nightly-сборка предназначена для дополнительного тестирования и может работать нестабильно." : "This nightly build is intended for additional testing and may be unstable.";
     public static string StableRollbackWarning => Ru ? "Вы используете nightly-сборку. Новых версий нет, но можно вернуться на последнюю стабильную версию." : "You are running a nightly build. No newer version is available, but you can return to the latest stable release.";
@@ -133,8 +132,8 @@ internal static class Strings
     public static string SwitchDev => Ru ? "Перейти на dev" : "Switch to dev";
     public static string SwitchPublic => Ru ? "Вернуться на публичную версию" : "Return to public version";
     public static string ChannelAvailable(ReleaseChannel channel, string version) => Ru
-        ? $"Переход на {(channel == ReleaseChannel.Dev ? "dev" : "публичную версию")} {version}"
-        : $"Switch to {(channel == ReleaseChannel.Dev ? "dev" : "public")} {version}";
+        ? $"Переход на {(channel == ReleaseChannel.Dev ? string.Empty : "публичную версию ")}{version}"
+        : $"Switch to {(channel == ReleaseChannel.Dev ? string.Empty : "public ")}{version}";
     public static string ChannelConfirmation(ReleaseChannel channel) => Ru
         ? $"Установить {(channel == ReleaseChannel.Dev ? "dev-сборку" : "публичную сборку")}? Настройки и профили сохранятся."
         : $"Install the {(channel == ReleaseChannel.Dev ? "dev" : "public")} build? Settings and profiles will be preserved.";

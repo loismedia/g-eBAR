@@ -261,6 +261,8 @@
                         <Image x:Name="LogoImage" Height="64" Stretch="Uniform" Margin="0,0,0,16" RenderOptions.BitmapScalingMode="HighQuality"/>
                         <TextBlock x:Name="AboutProductText" TextAlignment="Center" FontFamily="Segoe UI Variable Display" FontSize="30" FontWeight="SemiBold"/>
                         <TextBlock x:Name="VersionText" TextAlignment="Center" Margin="0,8,0,0" Foreground="{DynamicResource SecondaryText}"/>
+                        <TextBlock x:Name="AboutDescriptionText" TextAlignment="Center" Margin="0,16,0,0"/>
+                        <TextBlock x:Name="DeveloperText" TextAlignment="Center" Margin="0,8,0,0" Foreground="{DynamicResource SecondaryText}"/>
                         <StackPanel x:Name="ModulesPanel" Margin="0,12,0,0">
                             <TextBlock x:Name="ModulesTitleText" TextAlignment="Center" FontWeight="SemiBold"/>
                             <ItemsControl x:Name="ModulesList">
@@ -271,8 +273,6 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
                         </StackPanel>
-                        <TextBlock x:Name="AboutDescriptionText" TextAlignment="Center" Margin="0,16,0,0"/>
-                        <TextBlock x:Name="DeveloperText" TextAlignment="Center" Margin="0,8,0,0" Foreground="{DynamicResource SecondaryText}"/>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,16,0,0">
                             <Button x:Name="ChangelogButton" Content="📋" FontSize="16" Padding="0" Width="38" Height="34" Margin="0,0,8,0" Click="ChangelogClick"/>
                             <Button x:Name="ReportBugButton" Content="🐞" FontSize="16" Padding="0" Width="38" Height="34" Click="ReportBugClick"/>

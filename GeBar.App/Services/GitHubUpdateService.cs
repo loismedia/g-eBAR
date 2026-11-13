@@ -54,9 +54,11 @@ internal sealed partial class GitHubUpdateService : IDisposable
         {
             Version? assemblyVersion = Assembly.GetExecutingAssembly().GetName().Version;
             string version = assemblyVersion is null ? "1.0.0" : assemblyVersion.Revision > 0 ? assemblyVersion.ToString(4) : assemblyVersion.ToString(3);
-            return version + (BuildChannel.Current == ReleaseChannel.Dev ? IsCurrentBuildNightly ? " dev nightly" : " dev" : string.Empty);
+            return VersionLabel(version, BuildChannel.Current, IsCurrentBuildNightly);
         }
     }
+    internal static string VersionLabel(string version, ReleaseChannel channel, bool nightly) =>
+        version + (channel == ReleaseChannel.Dev ? nightly ? " dev nightly" : " dev" : string.Empty);
     public static string BuildRevision
     {
         get
