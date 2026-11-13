@@ -37,6 +37,7 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
     private bool _refused;
     private DateTimeOffset? _offSince;
     private int? _offPercentage;
+    private bool _sleepWasSilent;
     private int? _lastKnown;
     private readonly Dictionary<(int Vendor, int Product), (int Quiet, DateTimeOffset Resume)> _probes = [];
     private readonly Dictionary<(int Vendor, int Product), HidBatteryProtocolProfile> _protocols = [];
@@ -167,7 +168,11 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
         DeviceBatteryState? published;
         if (scan.Asleep || anyHandles && _offSince is not null)
         {
-            lock (_state) published = Asleep();
+            lock (_state)
+            {
+                _sleepWasSilent = _offSince is not null;
+                published = Asleep();
+            }
             Announce(published);
             return;
         }
@@ -205,12 +210,14 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
             logger.Info($"Profile {profile.Name}: the off packet is {Freeze.TotalMinutes:0} min old and the device keeps answering, awake again");
             _offSince = null;
             _offPercentage = null;
+            _sleepWasSilent = false;
             return true;
         }
-        if (reading.IsCharging != true && reading.Percentage == _offPercentage) return false;
+        if (!_sleepWasSilent && reading.IsCharging != true && reading.Percentage == _offPercentage) return false;
         logger.Info($"Profile {profile.Name}: device answered after the off packet, awake again");
         _offSince = null;
         _offPercentage = null;
+        _sleepWasSilent = false;
         return true;
     }
 
@@ -511,6 +518,7 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
                 _trendCharging = null;
                 _offSince = null;
                 _offPercentage = null;
+                _sleepWasSilent = false;
             }
         }
         _topology = topology;
@@ -558,13 +566,24 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
     private async Task ListenAsync(HidDeviceConnectionProfile connection, HidBatteryProtocolProfile battery, string statusPath, int generation, CancellationToken token)
     {
         HidDevice[] handles = [.. DeviceList.Local.GetHidDevices(connection.VendorId, connection.ProductId)];
-        HidDevice? device = handles.FirstOrDefault(item => HidDeviceScanner.PathOf(item).Equals(statusPath, StringComparison.OrdinalIgnoreCase));
-        if (device is null)
-        {
-            int expected = connection.Interfaces.FirstOrDefault(item => item.DevicePath.Equals(statusPath, StringComparison.OrdinalIgnoreCase))?.InputReportLength ?? 0;
-            device = expected > 0 ? handles.FirstOrDefault(item => HidDeviceScanner.InputLengthOf(item) == expected) : null;
-        }
+        HidDevice? device = StatusDevice(connection, handles, statusPath);
         if (device is not null) await ListenDeviceAsync(device, battery, generation, token).ConfigureAwait(false);
+    }
+
+    private static HidDevice? StatusDevice(HidDeviceConnectionProfile connection, HidDevice[] handles, string path)
+    {
+        HidDevice? exact = handles.FirstOrDefault(item => HidDeviceScanner.PathOf(item).Equals(path, StringComparison.OrdinalIgnoreCase));
+        if (exact is not null) return exact;
+        HidInterfaceProfile? expected = connection.Interfaces.FirstOrDefault(item => item.DevicePath.Equals(path, StringComparison.OrdinalIgnoreCase));
+        if (expected is null || expected.InputReportLength <= 0) return null;
+        string? collection = path.Split('#').ElementAtOrDefault(1);
+        HidProbeTarget[] matches = [.. HidDeviceScanner.Pair(connection.Interfaces, handles).Where(target =>
+            target.Interface.InputReportLength == expected.InputReportLength
+            && target.Interface.OutputReportLength == expected.OutputReportLength
+            && target.Interface.FeatureReportLength == expected.FeatureReportLength
+            && (expected.UsagePage is null || target.Interface.UsagePage == expected.UsagePage)
+            && (collection is null || string.Equals(collection, target.Interface.DevicePath.Split('#').ElementAtOrDefault(1), StringComparison.OrdinalIgnoreCase)))];
+        return matches.Length == 1 ? matches[0].Handle : null;
     }
 
     private async Task ListenDeviceAsync(HidDevice device, HidBatteryProtocolProfile battery, int generation, CancellationToken token)
@@ -582,7 +601,8 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
                 int count;
                 try { count = await stream.ReadAsync(buffer, token).ConfigureAwait(false); }
                 catch (TimeoutException) { continue; }
-                if (count <= 0 || generation != _listenerGeneration) continue;
+                if (count <= 0) break;
+                if (generation != _listenerGeneration) continue;
                 var packet = buffer.AsSpan(0, count);
 
                 DeviceBatteryState? published;
@@ -594,6 +614,7 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
                         if (generation != _listenerGeneration) continue;
                         _offSince = DateTimeOffset.Now;
                         _offPercentage = CurrentState.Percentage;
+                        _sleepWasSilent = false;
                         published = Asleep();
                     }
                     Announce(published);
@@ -614,6 +635,7 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
                     _failures = 0;
                     _offSince = null;
                     _offPercentage = null;
+                    _sleepWasSilent = false;
                     published = Commit(DeviceConnectionState.DeviceConnected, percentage, Trend(percentage, charging), DateTimeOffset.Now);
                 }
                 Announce(published);

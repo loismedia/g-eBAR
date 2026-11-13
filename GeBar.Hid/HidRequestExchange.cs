@@ -77,7 +77,7 @@ public static class HidRequestExchange
                 int count;
                 try { count = await stream.ReadAsync(buffer, deadline).ConfigureAwait(false); }
                 catch (TimeoutException) { continue; }
-                if (count <= 0) continue;
+                if (count <= 0) break;
                 byte[] packet = buffer[..count];
                 if ((matchPrefixHex is null || MatchesPrefix(packet, matchPrefixHex)) && (accept is null || accept(packet))) return packet;
                 unmatched?.Invoke(packet);

@@ -145,7 +145,7 @@ public static class HidBatteryReader
             while (!deadline.IsCancellationRequested)
             {
                 int count = await stream.ReadAsync(buffer, deadline.Token).ConfigureAwait(false);
-                if (count <= 0) continue;
+                if (count <= 0) break;
                 if (spec.ReportId != 0 && buffer[0] != spec.ReportId) continue;
                 if (count * 8 < spec.BitOffset + spec.ElementBits) continue;
                 return buffer[..count];

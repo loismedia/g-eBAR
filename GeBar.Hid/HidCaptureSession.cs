@@ -52,7 +52,8 @@ public sealed class HidCaptureSession : IAsyncDisposable
                 {
                     continue;
                 }
-                if (count > 0) PacketReceived?.Invoke(buffer.AsMemory(0, count).ToArray());
+                if (count <= 0) break;
+                PacketReceived?.Invoke(buffer.AsMemory(0, count).ToArray());
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ObjectDisposedException or OperationCanceledException or TimeoutException)
