@@ -62,15 +62,16 @@ internal sealed class SmartSaver(IAppLogger logger, SemaphoreSlim requests, Func
         string temporary = path + ".tmp";
         await using (FileStream stream = new(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
             await JsonSerializer.SerializeAsync(stream, updated, new JsonSerializerOptions { WriteIndented = true }, token);
-        File.Move(temporary, path, true);
         bool wasEnabled = Options(device.Id).Enabled;
-        _settings = updated;
         if (!_sessions.TryGetValue(device.Id, out Session? session)) _sessions[device.Id] = session = new(device, driver);
+        if (wasEnabled && !options.Enabled) await ApplyAsync(session, options.NormalPollingRate, token, disabling: true);
+        File.Move(temporary, path, true);
+        _settings = updated;
         session.LastRate = null;
         session.NextCheck = DateTimeOffset.MinValue;
         session.Error = null;
         if (options.Enabled) UpdateActivity(fullscreen(), DateTimeOffset.UtcNow);
-        if (options.Enabled || wasEnabled) await ApplyAsync(session, options.Enabled ? Target(session, options) : options.NormalPollingRate, token);
+        if (options.Enabled) await ApplyAsync(session, Target(session, options), token);
         StateChanged?.Invoke();
     }
 
@@ -125,13 +126,13 @@ internal sealed class SmartSaver(IAppLogger logger, SemaphoreSlim requests, Func
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
     }
 
-    private async Task ApplyAsync(Session session, int target, CancellationToken token)
+    private async Task ApplyAsync(Session session, int target, CancellationToken token, bool disabling = false)
     {
         SmartSaverOptions options = Options(session.Device.Id);
         MouseSettings actual = await Task.Run(() => session.Driver.ReadAsync(session.Device, token), token);
         target = SupportedRate(target, session.Driver.Capabilities);
         if (!session.Driver.Capabilities.PollingRates.Contains(target)) throw new NotSupportedException(Strings.Unsupported);
-        if (session.LastRate is int previous && actual.PollingRate != previous && actual.PollingRate != SupportedRate(options.NormalPollingRate, session.Driver.Capabilities))
+        if (!disabling && session.LastRate is int previous && actual.PollingRate != previous && actual.PollingRate != SupportedRate(options.NormalPollingRate, session.Driver.Capabilities))
             throw new InvalidOperationException(Strings.ChangedExternally);
         bool switched = actual.PollingRate != target;
         if (switched)
@@ -148,7 +149,7 @@ internal sealed class SmartSaver(IAppLogger logger, SemaphoreSlim requests, Func
         session.Error = null;
         Applied?.Invoke(session.Device.Id, actual);
         StateChanged?.Invoke();
-        if (switched && enteringGame && options.Enabled && options.Notify) Notification?.Invoke(session.Device.DisplayName, Strings.GameNotification(target));
+        if (!disabling && switched && enteringGame && options.Enabled && options.Notify) Notification?.Invoke(session.Device.DisplayName, Strings.GameNotification(target));
     }
 
     public async Task StopAsync(CancellationToken token)
