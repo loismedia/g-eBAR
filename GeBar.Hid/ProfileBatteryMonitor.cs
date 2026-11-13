@@ -155,7 +155,7 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
             published = Awake(reading)
                 ? Commit(DeviceConnectionState.DeviceConnected, reading.Percentage, Trend(reading.Percentage, reading.IsCharging), DateTimeOffset.Now,
                     transport: reading.Source == HidBatterySource.None ? ConnectionTransport.Bluetooth : ConnectionTransport.Default)
-                : Commit(DeviceConnectionState.DeviceOff, null, null, CurrentState.LastSuccessfulRead);
+                : Asleep();
         }
         Announce(published);
         if (reading.Source != HidBatterySource.None) StartListener(token);
@@ -194,7 +194,7 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
         _diagnostics = _diagnostics with { LastError = null };
         _trend.Clear();
         _lastLevel = null;
-        return Commit(DeviceConnectionState.DeviceOff, CurrentState.Percentage ?? _lastKnown, false, CurrentState.LastSuccessfulRead);
+        return Commit(DeviceConnectionState.DeviceOff, CurrentState.Percentage ?? _offPercentage ?? _lastKnown, false, CurrentState.LastSuccessfulRead);
     }
 
     private bool Awake(HidBatteryReading reading)
@@ -216,7 +216,7 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
 
     private DeviceBatteryState? Idle()
     {
-        if (_offSince is not null) return Commit(DeviceConnectionState.DeviceOff, null, null, CurrentState.LastSuccessfulRead);
+        if (_offSince is not null) return Asleep();
         if (CurrentState.LastSuccessfulRead is not DateTimeOffset lastRead) return Commit(DeviceConnectionState.Reading, null, null, null);
         if (DateTimeOffset.Now - lastRead <= Freeze) return null;
         _trend.Clear();
@@ -301,6 +301,12 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
 
     private HidBatteryProtocolProfile RememberProtocol(HidDeviceConnectionProfile connection, HidBatteryProtocolProfile battery)
     {
+        if (battery.OffPrefixHex is null)
+        {
+            HidBatteryProtocolProfile? status = profile.AllConnections().Select(item => item.Battery)
+                .FirstOrDefault(item => item.OffPrefixHex is not null && item.StatusDevicePath is not null);
+            if (status is not null) battery = battery with { OffPrefixHex = status.OffPrefixHex, StatusDevicePath = status.StatusDevicePath };
+        }
         (int Vendor, int Product) key = (connection.VendorId, connection.ProductId);
         _protocols[key] = battery;
         _resolved = battery;
@@ -558,7 +564,11 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
             int expected = connection.Interfaces.FirstOrDefault(item => item.DevicePath.Equals(statusPath, StringComparison.OrdinalIgnoreCase))?.InputReportLength ?? 0;
             device = expected > 0 ? handles.FirstOrDefault(item => HidDeviceScanner.InputLengthOf(item) == expected) : null;
         }
-        if (device is null) return;
+        if (device is not null) await ListenDeviceAsync(device, battery, generation, token).ConfigureAwait(false);
+    }
+
+    private async Task ListenDeviceAsync(HidDevice device, HidBatteryProtocolProfile battery, int generation, CancellationToken token)
+    {
         using HidStream? stream = HidRequestExchange.TryOpenShared(device);
         if (stream is null) return;
         var buffer = new byte[HidDeviceScanner.InputLengthOf(device)];
@@ -584,7 +594,7 @@ public sealed class ProfileBatteryMonitor(HidDeviceProfile profile, IAppLogger l
                         if (generation != _listenerGeneration) continue;
                         _offSince = DateTimeOffset.Now;
                         _offPercentage = CurrentState.Percentage;
-                        published = Commit(DeviceConnectionState.DeviceOff, null, null, CurrentState.LastSuccessfulRead);
+                        published = Asleep();
                     }
                     Announce(published);
                     continue;

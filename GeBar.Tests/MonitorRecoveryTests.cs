@@ -92,8 +92,18 @@ public class MonitorRecoveryTests
         HidDeviceProfile profile = Profile(device) with { Battery = Protocol(device) };
         await using var monitor = Monitor(profile);
         await Refresh(monitor, device);
-        typeof(ProfileBatteryMonitor).GetField("_offSince", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(monitor, DateTimeOffset.Now);
-        typeof(ProfileBatteryMonitor).GetField("_offPercentage", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(monitor, 26);
+        var status = new Mouse(0xFFFD, "status") { InputReply = Convert.FromHexString("000600000000000000") };
+        HidBatteryProtocolProfile battery = profile.Battery with { OffPrefixHex = "0600000000000000" };
+        using var lifetime = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var sleeping = new TaskCompletionSource<DeviceBatteryState>(TaskCreationOptions.RunContinuationsAsynchronously);
+        monitor.StateChanged += (_, state) => sleeping.TrySetResult(state);
+        int generation = (int)typeof(ProfileBatteryMonitor).GetField("_listenerGeneration", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(monitor)!;
+        Task listener = (Task)Method("ListenDeviceAsync").Invoke(monitor, [status, battery, generation, lifetime.Token])!;
+        await sleeping.Task.WaitAsync(lifetime.Token);
+        Assert.Equal(DeviceConnectionState.DeviceOff, monitor.CurrentState.ConnectionState);
+        Assert.Equal(26, monitor.CurrentState.Percentage);
+        lifetime.Cancel();
+        await listener;
         typeof(ProfileBatteryMonitor).GetField("_probes", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(monitor,
             new Dictionary<(int, int), (int, DateTimeOffset)> { [(device.VendorID, device.ProductID)] = (0, DateTimeOffset.Now.AddMinutes(30)) });
         device.Reply = new byte[65];
@@ -106,10 +116,12 @@ public class MonitorRecoveryTests
         Assert.Equal(TimeSpan.FromSeconds(30), Delay(monitor));
         await Refresh(monitor, device);
         Assert.Equal(DeviceConnectionState.DeviceOff, monitor.CurrentState.ConnectionState);
+        Assert.Equal(26, monitor.CurrentState.Percentage);
 
         device.Reply = Packet("00A10002020083001A");
         await Refresh(monitor, device);
         Assert.Equal(DeviceConnectionState.DeviceOff, monitor.CurrentState.ConnectionState);
+        Assert.Equal(26, monitor.CurrentState.Percentage);
         typeof(ProfileBatteryMonitor).GetField("_offSince", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(monitor, DateTimeOffset.Now.AddMinutes(-11));
         await Refresh(monitor, device);
         Assert.Equal(DeviceConnectionState.DeviceConnected, monitor.CurrentState.ConnectionState);
@@ -121,12 +133,24 @@ public class MonitorRecoveryTests
     public async Task StatusInterfaceCanBelongToAnotherConnection()
     {
         var device = new Mouse(0xFFFE, "battery");
-        var status = new HidDeviceConnectionProfile(0xFFFF, 0xFFFD, null, null, [new("status", 9, 0, 0)], new());
-        await using var monitor = Monitor(Profile(device) with { Connections = [status] });
-        HidDeviceConnectionProfile fallback = Profile(device).AllConnections().First();
+        var receiver = new Mouse(0xFFFD, "receiver");
+        var status = new HidDeviceConnectionProfile(receiver.VendorID, receiver.ProductID, null, null, [new("status", 9, 0, 0)], new());
+        HidDeviceProfile profile = Profile(device) with
+        {
+            Battery = Protocol(device) with { OffPrefixHex = "0600000000000000", StatusDevicePath = "status" },
+            Connections = [status]
+        };
+        await using var monitor = Monitor(profile);
+        HidDeviceConnectionProfile fallback = profile.AllConnections().First();
 
         Assert.Equal(status, Method("StatusConnection").Invoke(monitor, ["STATUS", fallback]));
         Assert.Same(fallback, Method("StatusConnection").Invoke(monitor, ["unknown", fallback]));
+        HidBatteryProtocolProfile resolved = (HidBatteryProtocolProfile)Method("RememberProtocol").Invoke(monitor, [status, Protocol(receiver)])!;
+        Assert.Equal(profile.Battery.OffPrefixHex, resolved.OffPrefixHex);
+        Assert.Equal(profile.Battery.StatusDevicePath, resolved.StatusDevicePath);
+        Assert.Equal(receiver.DevicePath, resolved.DevicePath);
+        Assert.Equal(Protocol(receiver).RequestHex, resolved.RequestHex);
+        Assert.Equal(status, Method("StatusConnection").Invoke(monitor, [resolved.StatusDevicePath, fallback]));
     }
 
     [Theory]
@@ -185,13 +209,14 @@ public class MonitorRecoveryTests
     private sealed class Mouse(int product, string path) : HidDevice
     {
         public byte[] Reply { get; set; } = new byte[65];
+        public byte[]? InputReply { get; set; }
         public int Reads { get; set; }
         public override int VendorID => 0xFFFF;
         public override int ProductID => product;
         public override int ReleaseNumberBcd => 0;
         public override string DevicePath => path;
         public override string GetFileSystemName() => path;
-        public override int GetMaxInputReportLength() => 0;
+        public override int GetMaxInputReportLength() => InputReply?.Length ?? 0;
         public override int GetMaxOutputReportLength() => 0;
         public override int GetMaxFeatureReportLength() => 65;
         protected override DeviceStream OpenDeviceDirectly(OpenConfiguration configuration) => new MouseStream(this);
@@ -208,6 +233,17 @@ public class MonitorRecoveryTests
             device.Reply.AsSpan(0, Math.Min(count, device.Reply.Length)).CopyTo(buffer.AsSpan(offset, count));
         }
         public override int Read(byte[] buffer, int offset, int count) => throw new TimeoutException();
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (device.InputReply is not byte[] packet)
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+                return 0;
+            }
+            device.InputReply = null;
+            packet.CopyTo(buffer);
+            return packet.Length;
+        }
         public override void Write(byte[] buffer, int offset, int count) { }
     }
 
