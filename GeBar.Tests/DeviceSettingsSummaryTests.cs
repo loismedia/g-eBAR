@@ -21,7 +21,7 @@ public class DeviceSettingsSummaryTests
     {
         string directory = Path.Combine(Path.GetTempPath(), $"gebar-smart-ui-{Guid.NewGuid():N}");
         var driver = new Driver();
-        using var module = new DpiModule(new Logger(), [driver], Path.Combine(directory, "smart.json"), () => false);
+        using var module = new DpiModule(new TestLogger(), [driver], Path.Combine(directory, "smart.json"), () => false);
         try
         {
             await module.SetDeviceAsync(Device, CancellationToken.None);
@@ -68,7 +68,7 @@ public class DeviceSettingsSummaryTests
         string directory = Path.Combine(Path.GetTempPath(), $"gebar-shared-module-{Guid.NewGuid():N}");
         using var loader = new SettingsModuleLoader();
         var driver = new Driver();
-        using var module = new DpiModule(new Logger(), [driver], Path.Combine(directory, "smart.json"), () => false);
+        using var module = new DpiModule(new TestLogger(), [driver], Path.Combine(directory, "smart.json"), () => false);
         typeof(SettingsModuleLoader).GetProperty(nameof(SettingsModuleLoader.Module))!.SetValue(loader, module);
         ControlCenterWindow? first = null, second = null;
         try
@@ -111,7 +111,7 @@ public class DeviceSettingsSummaryTests
     public void EditedValuesAreNotPublishedBeforeSave() => Sta(async () =>
     {
         var driver = new Driver();
-        using var module = new DpiModule(new Logger(), [driver]);
+        using var module = new DpiModule(new TestLogger(), [driver]);
         await module.SetDeviceAsync(Device, CancellationToken.None);
         TextBox input = Assert.Single(Descendants(module.View).OfType<TextBox>());
 
@@ -130,7 +130,7 @@ public class DeviceSettingsSummaryTests
     public void BackgroundReadRefreshesActualSummaryWithoutOverwritingEdits() => Sta(async () =>
     {
         var driver = new Driver();
-        using var module = new DpiModule(new Logger(), [driver]);
+        using var module = new DpiModule(new TestLogger(), [driver]);
         await module.SetDeviceAsync(Device, CancellationToken.None);
         TextBox input = Assert.Single(Descendants(module.View).OfType<TextBox>());
         input.Text = "1200";
@@ -146,7 +146,7 @@ public class DeviceSettingsSummaryTests
     [Fact]
     public void UnsupportedSelectionClearsPreviousSummary() => Sta(async () =>
     {
-        using var module = new DpiModule(new Logger(), [new Driver()]);
+        using var module = new DpiModule(new TestLogger(), [new Driver()]);
         await module.SetDeviceAsync(Device, CancellationToken.None);
         Assert.NotNull(module.CurrentSettings);
 
@@ -160,7 +160,7 @@ public class DeviceSettingsSummaryTests
     public void PreloadedSettingsAppearBeforeDeviceReadCompletes() => Sta(async () =>
     {
         var driver = new Driver();
-        using var module = new DpiModule(new Logger(), [driver]);
+        using var module = new DpiModule(new TestLogger(), [driver]);
         await module.SetDeviceAsync(Device, CancellationToken.None);
         HidDeviceProfile other = Device with { Id = "mouse-b", Name = "Mouse B" };
         driver.Settings = new(400, 1000, 2);
@@ -190,7 +190,7 @@ public class DeviceSettingsSummaryTests
     public void DpiWheelUsesDeviceStepWithoutWriting(string initial, int delta, string expected) => Sta(async () =>
     {
         var driver = new Driver();
-        using var module = new DpiModule(new Logger(), [driver]);
+        using var module = new DpiModule(new TestLogger(), [driver]);
         await module.SetDeviceAsync(Device, CancellationToken.None);
         TextBox input = Assert.Single(Descendants(module.View).OfType<TextBox>());
         input.Text = initial;
@@ -307,12 +307,4 @@ public class DeviceSettingsSummaryTests
         public void Dispose() { }
     }
 
-    private sealed class Logger : IAppLogger
-    {
-        public string LogDirectory => Path.GetTempPath();
-        public bool IsRawPacketLoggingEnabled => false;
-        public void Info(string message) { }
-        public void Warning(string message) { }
-        public void Error(string message, Exception? exception = null) { }
-    }
 }

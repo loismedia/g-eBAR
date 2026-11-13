@@ -10,7 +10,7 @@ public class ProbeBackoffTests
 
     private static ProfileBatteryMonitor Monitor() => new(
         new HidDeviceProfile("absent", "Absent device", Connection.VendorId, Connection.ProductId, null, null, [], new()),
-        new Logger(), TimeSpan.FromMinutes(5));
+        new TestLogger(), TimeSpan.FromMinutes(5));
 
     [Fact]
     public async Task AutomaticRefreshKeepsProbePause()
@@ -65,12 +65,4 @@ public class ProbeBackoffTests
 
     private static FieldInfo Field(string name) => typeof(ProfileBatteryMonitor).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!;
 
-    private sealed class Logger : IAppLogger
-    {
-        public string LogDirectory => Path.GetTempPath();
-        public bool IsRawPacketLoggingEnabled => false;
-        public void Info(string message) { }
-        public void Warning(string message) { }
-        public void Error(string message, Exception? exception = null) { }
-    }
 }

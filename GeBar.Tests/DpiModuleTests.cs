@@ -96,7 +96,7 @@ public class DpiModuleTests
     [Fact]
     public void BatteryProtocolSupportDoesNotEnableUnknownSettingsWrites()
     {
-        var driver = new WlMouseSettingsDriver(new Logger());
+        var driver = new WlMouseSettingsDriver(new TestLogger());
         var unsupported = new HidDeviceProfile("other", "Other mouse", 0xFFFF, 0xFFFF, null, null, [], new());
         var huan = unsupported with { VendorId = 0x36A7, ProductId = 0xA864 };
 
@@ -130,12 +130,4 @@ public class DpiModuleTests
         if (failure is not null) ExceptionDispatchInfo.Capture(failure).Throw();
     }
 
-    private sealed class Logger : IAppLogger
-    {
-        public string LogDirectory => Path.GetTempPath();
-        public bool IsRawPacketLoggingEnabled => false;
-        public void Info(string message) { }
-        public void Warning(string message) { }
-        public void Error(string message, Exception? exception = null) { }
-    }
 }

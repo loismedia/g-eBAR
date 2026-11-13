@@ -11,19 +11,44 @@ namespace GeBar.Tests;
 
 public class HidProfileFileTests
 {
-    private delegate void AppendPacket(string direction, ReadOnlySpan<byte> packet);
     private static HidDeviceProfile Device(string id) => new(id, id, 1, 2, null, null, [], new());
 
     [Fact]
     public void PacketDisplayKeepsUppercaseHexAndSpaces() => WithWindow((window, _) =>
     {
-        var append = typeof(MainWindow).GetMethod("AppendPacket", BindingFlags.Instance | BindingFlags.NonPublic)!.CreateDelegate<AppendPacket>(window);
-        append("RX", [0, 0x0A, 0xFF]);
-        append("RX", []);
+        Invoke<object?>(window, "PacketReceived", new ReadOnlyMemory<byte>([0, 0x0A, 0xFF]), null, 0);
+        Invoke<object?>(window, "PacketReceived", ReadOnlyMemory<byte>.Empty, null, 0);
+        Invoke<object?>(window, "FlushPackets");
 
         string text = ((TextBox)window.FindName("PacketsText")).Text;
         Assert.Contains("RX [3] 00 0A FF" + Environment.NewLine, text);
         Assert.Contains("RX [0] " + Environment.NewLine, text);
+    });
+
+    [Fact]
+    public void CaptureBatchesAreBoundedAndStoppedReadersCannotAppend() => WithWindow((window, _) =>
+    {
+        for (int index = 0; index < 5000; index++)
+            Invoke<object?>(window, "PacketReceived", new ReadOnlyMemory<byte>([0, (byte)(index >> 8), (byte)index]), null, 0);
+        var pending = (System.Collections.ICollection)typeof(MainWindow).GetField("_pendingPackets", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+        Assert.Equal(512, pending.Count);
+        var text = (TextBox)window.FindName("PacketsText");
+        Assert.Empty(text.Text);
+        window.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+        Assert.Contains("skipped 4488 packets", text.Text);
+        Assert.Contains("RX [3] 00 13 87", text.Text);
+        Assert.Equal(513, text.Text.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries).Length);
+        Assert.Empty(pending);
+
+        Invoke<object?>(window, "PacketReceived", new ReadOnlyMemory<byte>([0, 0xEE]), null, 0);
+        Invoke<Task>(window, "StopCaptureAsync").GetAwaiter().GetResult();
+        string stopped = text.Text;
+        Invoke<object?>(window, "PacketReceived", new ReadOnlyMemory<byte>([0, 0xFF]), null, 0);
+        Invoke<object?>(window, "FlushPackets");
+        Assert.Equal(stopped, text.Text);
+        Invoke<object?>(window, "PacketReceived", new ReadOnlyMemory<byte>([0, 0xAA]), null, 1);
+        Invoke<object?>(window, "FlushPackets");
+        Assert.Contains("RX [2] 00 AA", text.Text);
     });
 
     [Fact]

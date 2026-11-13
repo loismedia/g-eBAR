@@ -92,6 +92,26 @@ public class SmartSaverTests
         await fixture.Saver.StopAsync(CancellationToken.None);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedDisableKeepsRestorationEnabled(bool written)
+    {
+        using var fixture = new Fixture();
+        await fixture.Configure(new(true, false, 1000));
+        fixture.Driver.FailPolling = !written;
+        fixture.Driver.FailAfterWrite = written;
+
+        await Assert.ThrowsAsync<IOException>(() => fixture.Configure(new(false, false, 1000)));
+
+        Assert.True(fixture.Saver.Options(Mouse.Id).Enabled);
+        Assert.True(fixture.NewSaver().Options(Mouse.Id).Enabled);
+        Assert.Equal(written ? 1000 : 125, fixture.Driver.Settings.PollingRate);
+        fixture.Driver.FailPolling = fixture.Driver.FailAfterWrite = false;
+        await fixture.Saver.StopAsync(CancellationToken.None);
+        Assert.Equal(1000, fixture.Driver.Settings.PollingRate);
+    }
+
     [Fact]
     public async Task WiredPollingLimitDoesNotReplaceSavedWirelessRate()
     {
@@ -187,7 +207,7 @@ public class SmartSaverTests
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
             Saver = NewSaver();
         }
-        public SmartSaver NewSaver() => new(new Logger(), _gate, _ => Driver, Path, () => Game);
+        public SmartSaver NewSaver() => new(new TestLogger(), _gate, _ => Driver, Path, () => Game);
         public async Task Configure(SmartSaverOptions options)
         {
             await _gate.WaitAsync();
@@ -228,12 +248,4 @@ public class SmartSaverTests
         }
     }
 
-    private sealed class Logger : IAppLogger
-    {
-        public string LogDirectory => System.IO.Path.GetTempPath();
-        public bool IsRawPacketLoggingEnabled => false;
-        public void Info(string message) { }
-        public void Warning(string message) { }
-        public void Error(string message, Exception? exception = null) { }
-    }
 }

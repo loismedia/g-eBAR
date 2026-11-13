@@ -29,6 +29,8 @@ public class UpdateWindowTests
                     true, null, null, false, nightly, downgrade, TargetChannel: target);
                 window = new UpdateWindow(release, service, logger);
 
+                string version = "1.3.12" + ((target ?? BuildChannel.Current) == ReleaseChannel.Dev ? nightly ? " dev nightly" : " dev" : string.Empty);
+                Assert.Contains(version, ((TextBlock)window.FindName("AvailableText")).Text);
                 Assert.Equal(warning ? Visibility.Visible : Visibility.Collapsed, ((Border)window.FindName("NightlyWarning")).Visibility);
                 Assert.Equal(rollback ? Strings.Rollback : Strings.Download, ((Button)window.FindName("DownloadButton")).Content);
                 if (warning) Assert.Equal(rollback ? Strings.StableRollbackWarning : Strings.NightlyWarning,

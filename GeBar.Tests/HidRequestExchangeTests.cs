@@ -8,6 +8,22 @@ public class HidRequestExchangeTests
 {
     private static byte[] Packet(string hex, int length = 65) => Convert.FromHexString(hex.PadRight(length * 2, '0'));
 
+    [Fact]
+    public async Task EndedStreamIsReadOnce()
+    {
+        using var stream = new EndedStream();
+        byte[]? response = await HidRequestExchange.WriteThenReadInputAsync(stream, [0], 9, null, TimeSpan.FromSeconds(1), CancellationToken.None);
+        Assert.Null(response);
+        Assert.Equal(1, stream.Reads);
+    }
+
+    private sealed class EndedStream : MemoryStream
+    {
+        public int Reads;
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+            ++Reads == 1 ? ValueTask.FromResult(0) : throw new InvalidOperationException("Read after end of stream");
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

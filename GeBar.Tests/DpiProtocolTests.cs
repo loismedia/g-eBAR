@@ -47,7 +47,7 @@ public class DpiProtocolTests
         string[] after = [.. Captured];
         after[1] = "00A100021A018101060190019004B004B0064006400C800C801900190075307530";
         using var stream = new Replies([.. Captured, "00A100021A010101", .. after]);
-        var driver = new WlMouseSettingsDriver(new Logger());
+        var driver = new WlMouseSettingsDriver(new TestLogger());
 
         MouseSettings actual = await driver.Save(stream, Original, Original with { Dpi = 1200 }, CancellationToken.None);
 
@@ -61,7 +61,7 @@ public class DpiProtocolTests
     public async Task ExternallyChangedSettingsPreventWrites()
     {
         using var stream = new Replies(Captured);
-        var driver = new WlMouseSettingsDriver(new Logger());
+        var driver = new WlMouseSettingsDriver(new TestLogger());
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => driver.Save(stream, Original with { Dpi = 1600 }, Original with { Dpi = 1200 }, CancellationToken.None));
 
@@ -73,7 +73,7 @@ public class DpiProtocolTests
     public async Task AcknowledgedWriteWithoutMatchingReadbackIsNotSuccess()
     {
         using var stream = new Replies([.. Captured, "00A100021A010101", .. Captured]);
-        var driver = new WlMouseSettingsDriver(new Logger());
+        var driver = new WlMouseSettingsDriver(new TestLogger());
 
         await Assert.ThrowsAsync<IOException>(() => driver.Save(stream, Original, Original with { Dpi = 1200 }, CancellationToken.None));
     }
@@ -87,7 +87,7 @@ public class DpiProtocolTests
         after[4] = "00A100020201800120";
         after[5] = "00A10002030188018703";
         using var stream = new Replies([.. before, "00A1000202010001", "00A1000203010801", .. after]);
-        var driver = new WlMouseSettingsDriver(new Logger());
+        var driver = new WlMouseSettingsDriver(new TestLogger());
 
         MouseSettings actual = await driver.Save(stream, Original, Original with { PollingRate = 2000, Lod = 0.7 }, CancellationToken.None);
 
@@ -123,7 +123,7 @@ public class DpiProtocolTests
     public async Task UnsupportedValuesAreRejectedBeforeAccessingDevice(int dpi, int rate, double lod)
     {
         using var stream = new Replies([]);
-        var driver = new WlMouseSettingsDriver(new Logger());
+        var driver = new WlMouseSettingsDriver(new TestLogger());
 
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => driver.Save(stream, Original, new(dpi, rate, lod), CancellationToken.None));
 
@@ -195,12 +195,4 @@ public class DpiProtocolTests
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
-    private sealed class Logger : IAppLogger
-    {
-        public string LogDirectory => Path.GetTempPath();
-        public bool IsRawPacketLoggingEnabled => false;
-        public void Info(string message) { }
-        public void Warning(string message) { }
-        public void Error(string message, Exception? exception = null) { }
-    }
 }
