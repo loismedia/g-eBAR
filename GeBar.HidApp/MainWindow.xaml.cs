@@ -25,6 +25,11 @@ internal partial class MainWindow : Window
     private InterfaceItem? _selectedInterface;
     private HidCaptureSession? _capture;
     private readonly List<HidCaptureSession> _listeners = [];
+    private readonly Lock _packetQueueLock = new();
+    private readonly Queue<(string Direction, ReadOnlyMemory<byte> Packet)> _pendingPackets = [];
+    private bool _packetFlushPending;
+    private int _skippedPackets;
+    private int _captureGeneration;
     private int _loggedPackets;
     private readonly List<string> _probeTrace = [];
     private readonly List<string> _packetTrace = [];
@@ -40,6 +45,7 @@ internal partial class MainWindow : Window
     private const int MaximumPacketChars = 400_000;
     private const int LoggedPacketsPerCapture = 200;
     private const int ExportedPackets = 300;
+    private const int MaximumPendingPackets = 512;
     private readonly FileLogger _logger;
 
     private readonly string ProfilesDirectory;
@@ -417,7 +423,8 @@ internal partial class MainWindow : Window
     private async Task StartCaptureAsync(InterfaceItem item)
     {
         var capture = new HidCaptureSession(item.Profile.DevicePath);
-        capture.PacketReceived += PacketReceived;
+        int generation = _captureGeneration;
+        capture.PacketReceived += packet => PacketReceived(packet, null, generation);
         capture.CaptureFailed += CaptureFailed;
         await capture.StartAsync();
         _capture = capture;
@@ -429,13 +436,14 @@ internal partial class MainWindow : Window
     {
         await StopCaptureAsync();
         InterfaceItem? first = null;
+        int generation = _captureGeneration;
         foreach (InterfaceItem item in interfaces.Where(item => item.Profile.InputReportLength > 0 && item.IsPresent)
             .OrderByDescending(item => item.Profile.InputReportLength))
         {
             try
             {
                 var listener = new HidCaptureSession(item.Profile.DevicePath);
-                listener.PacketReceived += packet => PacketReceived(packet, item);
+                listener.PacketReceived += packet => PacketReceived(packet, item, generation);
                 listener.CaptureFailed += CaptureFailed;
                 await listener.StartAsync();
                 _listeners.Add(listener);
@@ -463,7 +471,15 @@ internal partial class MainWindow : Window
         finally { _selectingCaptureInterface = false; }
     }
 
-    private void ClearPacketsClick(object sender, RoutedEventArgs e) => PacketsText.Clear();
+    private void ClearPacketsClick(object sender, RoutedEventArgs e)
+    {
+        lock (_packetQueueLock)
+        {
+            _pendingPackets.Clear();
+            _skippedPackets = 0;
+        }
+        PacketsText.Clear();
+    }
 
     private void CaptureFailed(Exception exception)
     {
@@ -471,12 +487,40 @@ internal partial class MainWindow : Window
         if (!Dispatcher.HasShutdownStarted) Dispatcher.BeginInvoke(() => CaptureStatusText.Text = Strings.CaptureUnavailable);
     }
 
-    private void PacketReceived(ReadOnlyMemory<byte> packet) => PacketReceived(packet, null);
-
-    private void PacketReceived(ReadOnlyMemory<byte> packet, InterfaceItem? source)
+    private void PacketReceived(ReadOnlyMemory<byte> packet, InterfaceItem? source, int generation)
     {
         if (Dispatcher.HasShutdownStarted) return;
-        Dispatcher.BeginInvoke(() => AppendPacket(source is null ? "RX" : $"RX {source.Index}", packet.Span));
+        lock (_packetQueueLock)
+        {
+            if (generation != _captureGeneration) return;
+            if (_pendingPackets.Count == MaximumPendingPackets)
+            {
+                _pendingPackets.Dequeue();
+                _skippedPackets++;
+            }
+            _pendingPackets.Enqueue((source is null ? "RX" : $"RX {source.Index}", packet));
+            if (_packetFlushPending) return;
+            _packetFlushPending = true;
+        }
+        Dispatcher.BeginInvoke(FlushPackets, System.Windows.Threading.DispatcherPriority.Background);
+    }
+
+    private void FlushPackets()
+    {
+        (string Direction, ReadOnlyMemory<byte> Packet)[] packets;
+        int skipped;
+        lock (_packetQueueLock)
+        {
+            packets = [.. _pendingPackets];
+            _pendingPackets.Clear();
+            skipped = _skippedPackets;
+            _skippedPackets = 0;
+            _packetFlushPending = false;
+        }
+        if (packets.Length == 0) return;
+        string text = string.Join(Environment.NewLine, packets.Select(item => FormatPacket(item.Direction, item.Packet.Span)));
+        if (skipped > 0) text = $"{DateTime.Now:HH:mm:ss.fff} RX skipped {skipped} packets{Environment.NewLine}" + text;
+        Append(text);
     }
 
     private void CollectPacket(string line)
@@ -573,6 +617,12 @@ internal partial class MainWindow : Window
 
     private async Task StopCaptureAsync()
     {
+        lock (_packetQueueLock)
+        {
+            _captureGeneration++;
+            _pendingPackets.Clear();
+            _skippedPackets = 0;
+        }
         if (_capture is not null)
         {
             await _capture.DisposeAsync();
@@ -595,13 +645,13 @@ internal partial class MainWindow : Window
         BatteryRequestButton.IsEnabled = _selectedDevice?.IsOnline == true;
     }
 
-    private void AppendPacket(string direction, ReadOnlySpan<byte> packet)
+    private string FormatPacket(string direction, ReadOnlySpan<byte> packet)
     {
         string hex = BitConverter.ToString(packet.ToArray()).Replace('-', ' ');
         string line = $"{direction} [{packet.Length}] {hex}";
         if (_extendedMode || _loggedPackets++ < LoggedPacketsPerCapture) _logger.Info($"packet {line}");
         CollectPacket(line);
-        Append($"{DateTime.Now:HH:mm:ss.fff} {line}");
+        return $"{DateTime.Now:HH:mm:ss.fff} {line}";
     }
 
     private void Append(string line)
