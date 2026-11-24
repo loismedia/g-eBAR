@@ -15,6 +15,8 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource, IBackgro
     private readonly IAppLogger _logger;
     private readonly Func<IMouseSettingsDriver>[] _drivers;
     private readonly TextBlock _deviceName = new() { FontWeight = FontWeights.SemiBold };
+    private readonly TextBlock _support = new() { Text = "\uE73E", FontFamily = new("Segoe Fluent Icons"),
+        FontSize = 14, Margin = new(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, Visibility = Visibility.Collapsed };
     private readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap, Margin = new(0, 12, 0, 0) };
     private readonly TextBlock _range = new() { FontSize = 12, Margin = new(0, 4, 0, 0) };
     private readonly TextBox _dpi = new();
@@ -58,8 +60,10 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource, IBackgro
         _smartSaver.Applied += ApplySettings;
         _smartSaver.StateChanged += UpdateSmartStatus;
         var panel = new StackPanel();
-        panel.Children.Add(_deviceName);
-        _deviceName.Margin = new(4, 0, 0, 12);
+        var deviceHeading = new StackPanel { Orientation = Orientation.Horizontal, Margin = new(4, 0, 0, 12) };
+        deviceHeading.Children.Add(_deviceName);
+        deviceHeading.Children.Add(_support);
+        panel.Children.Add(deviceHeading);
         AutomationProperties.SetName(_refresh, Strings.Read);
         _dpi.SetResourceReference(FrameworkElement.StyleProperty, "NumberBox");
         _range.SetResourceReference(TextBlock.ForegroundProperty, "SecondaryText");
@@ -174,8 +178,13 @@ public sealed class DpiModule : ISettingsModule, IDeviceSettingsSource, IBackgro
             _polling.ItemsSource = _lod.ItemsSource = null;
         }
         _deviceName.Text = device?.DisplayName ?? string.Empty;
+        _support.Visibility = device is null ? Visibility.Collapsed : Visibility.Visible;
+        _support.Text = _driver is null ? "\uE711" : "\uE73E";
+        _support.Foreground = _driver is null ? Brushes.IndianRed : Brushes.MediumSeaGreen;
+        _support.ToolTip = _driver is null ? Strings.Unsupported : Strings.Supported;
+        AutomationProperties.SetName(_support, (string)_support.ToolTip);
         SetBusy(true);
-        _status.Text = _driver is null ? Strings.Unsupported : Strings.Loading;
+        _status.Text = _driver is null ? string.Empty : Strings.Loading;
         try
         {
             if (_driver is null || device is null) return;
