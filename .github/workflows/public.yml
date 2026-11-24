@@ -61,6 +61,7 @@ jobs:
             const date = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit' }).format(new Date()).replace('/', '.');
             core.setOutput('version', version);
             core.setOutput('hid_version', `${date}-hid-${context.sha.substring(0, 5).toUpperCase()}`);
+            core.setOutput('dpi_version', `${date}-dpi-${context.sha.substring(0, 5).toUpperCase()}`);
             core.exportVariable('BUILD_STARTED_AT', Math.floor(Date.now() / 1000));
             core.info(`Build version: ${version}`);
       - name: Lint Dockerfile
@@ -90,6 +91,8 @@ jobs:
             NIGHTLY=false
             PUBLISH_HID=true
             HID_VERSION=${{ steps.metadata.outputs.hid_version }}
+            PUBLISH_DPI=true
+            DPI_VERSION=${{ steps.metadata.outputs.dpi_version }}
             SOURCE_REVISION=${{ github.sha }}
           outputs: type=local,dest=./artifacts/g-eBAR-win-x64
       - name: Verify artifacts
@@ -99,9 +102,7 @@ jobs:
           set -euo pipefail
           test -s artifacts/g-eBAR-win-x64/g-eBAR.exe
           test -s artifacts/g-eBAR-win-x64/g-eHID.exe
-          test -s artifacts/g-eBAR-win-x64/LICENSE
-          cd artifacts/g-eBAR-win-x64
-          sha256sum g-eBAR.exe g-eHID.exe LICENSE > SHA256SUMS.txt
+          test -s artifacts/g-eBAR-win-x64/g-eDPI.dll
           printf 'build_time=%s\n' "$(TZ='Europe/Moscow' date '+%Y-%m-%d %H:%M:%S UTC+3')" >> "$GITHUB_OUTPUT"
           printf 'build_duration=%ss\n' "$(( $(date +%s) - BUILD_STARTED_AT ))" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v7
@@ -109,8 +110,7 @@ jobs:
           name: g-eBAR-win-x64
           path: |
             artifacts/g-eBAR-win-x64/*.exe
-            artifacts/g-eBAR-win-x64/SHA256SUMS.txt
-            artifacts/g-eBAR-win-x64/LICENSE
+            artifacts/g-eBAR-win-x64/g-eDPI.dll
           if-no-files-found: error
           retention-days: 30
 
@@ -166,6 +166,7 @@ jobs:
           PREVIOUS_TAG: ${{ steps.previous-release.outputs.result }}
           BUILD_VERSION: ${{ steps.metadata.outputs.version }}
           HID_VERSION: ${{ steps.metadata.outputs.hid_version }}
+          DPI_VERSION: ${{ steps.metadata.outputs.dpi_version }}
           BUILD_TIME: ${{ steps.verify.outputs.build_time }}
           BUILD_DURATION: ${{ steps.verify.outputs.build_duration }}
         run: |
@@ -199,7 +200,8 @@ jobs:
 
           {
             printf 'g-eBAR v%s\n\n' "$BUILD_VERSION"
-            printf 'g-eHID: %s\n\n' "$HID_VERSION"
+            printf 'g-eHID %s\n\n' "$HID_VERSION"
+            printf 'g-eDPI %s\n\n' "$DPI_VERSION"
             printf 'Built: %s / duration: %s / commit: %s\n\n' "$BUILD_TIME" "$BUILD_DURATION" "${GITHUB_SHA:0:7}"
             printf '### Changelog\n\n'
           } > release-body.md
@@ -242,8 +244,7 @@ jobs:
           files: |
             artifacts/g-eBAR-win-x64/g-eBAR.exe
             artifacts/g-eBAR-win-x64/g-eHID.exe
-            artifacts/g-eBAR-win-x64/SHA256SUMS.txt
-            artifacts/g-eBAR-win-x64/LICENSE
+            artifacts/g-eBAR-win-x64/g-eDPI.dll
           fail_on_unmatched_files: true
           generate_release_notes: false
           overwrite_files: false

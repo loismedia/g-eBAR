@@ -6,6 +6,8 @@ ARG APP_VERSION
 ARG NIGHTLY
 ARG PUBLISH_HID=false
 ARG HID_VERSION
+ARG PUBLISH_DPI=false
+ARG DPI_VERSION
 ARG SOURCE_REVISION
 
 WORKDIR /source
@@ -14,6 +16,7 @@ COPY Directory.Build.props g-eBAR.slnx ./
 COPY GeBar.Core/GeBar.Core.csproj GeBar.Core/
 COPY GeBar.Hid/GeBar.Hid.csproj GeBar.Hid/
 COPY GeBar.UI/GeBar.UI.csproj GeBar.UI/
+COPY GeBar.Dpi/GeBar.Dpi.csproj GeBar.Dpi/
 COPY GeBar.App/GeBar.App.csproj GeBar.App/
 COPY GeBar.HidApp/GeBar.HidApp.csproj GeBar.HidApp/
 COPY GeBar.Tests/GeBar.Tests.csproj GeBar.Tests/
@@ -24,6 +27,7 @@ RUN --mount=type=cache,id=gebar-nuget,target=/root/.nuget/packages,sharing=locke
 COPY GeBar.Core/ GeBar.Core/
 COPY GeBar.Hid/ GeBar.Hid/
 COPY GeBar.UI/ GeBar.UI/
+COPY GeBar.Dpi/ GeBar.Dpi/
 COPY GeBar.App/ GeBar.App/
 COPY GeBar.HidApp/ GeBar.HidApp/
 COPY GeBar.Tests/ GeBar.Tests/
@@ -72,6 +76,11 @@ RUN --mount=type=cache,id=gebar-nuget,target=/root/.nuget/packages,sharing=locke
 
 RUN if [ "$PUBLISH_HID" = "true" ]; then cp "/probe/g-eHID.exe" "/out/g-eHID.exe"; fi
 
+RUN --mount=type=cache,id=gebar-nuget,target=/root/.nuget/packages,sharing=locked \
+    if [ "$PUBLISH_DPI" = "true" ]; then dotnet build GeBar.Dpi/GeBar.Dpi.csproj \
+    --configuration Release --no-restore --runtime win-x64 --output /dpi \
+    -p:ContinuousIntegrationBuild=true -p:DpiVersion=$DPI_VERSION \
+    -p:SourceRevisionId=$SOURCE_REVISION && cp /dpi/g-eDPI.dll /out/g-eDPI.dll; fi
+
 FROM scratch AS artifact
 COPY --from=publish /out/ /
-COPY LICENSE /LICENSE

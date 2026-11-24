@@ -14,6 +14,7 @@
   </Folder>
   <Project Path="GeBar.App/GeBar.App.csproj" />
   <Project Path="GeBar.Core/GeBar.Core.csproj" />
+  <Project Path="GeBar.Dpi/GeBar.Dpi.csproj" />
   <Project Path="GeBar.Hid/GeBar.Hid.csproj" />
   <Project Path="GeBar.HidApp/GeBar.HidApp.csproj" />
   <Project Path="GeBar.Tests/GeBar.Tests.csproj" />
