@@ -28,8 +28,10 @@ public class UpdateChannelTests
         }
     };
 
-    [Fact]
-    public async Task ReleaseParsingIgnoresInvalidVersionsAndKeepsCaseInsensitiveAssetNames()
+    [Theory]
+    [InlineData(":")]
+    [InlineData("")]
+    public async Task ReleaseParsingIgnoresInvalidVersionsAndKeepsCaseInsensitiveAssetNames(string separator)
     {
         string directory = Path.Combine(Path.GetTempPath(), $"gebar-release-parsing-{Guid.NewGuid():N}");
         try
@@ -37,8 +39,10 @@ public class UpdateChannelTests
             var payload = new JsonArray(JsonSerializer.SerializeToNode(Release("invalid", false)), JsonSerializer.SerializeToNode(Release("99.0.0", false)));
             payload[1]!["assets"]![0]!["name"] = "G-EBAR.EXE";
             payload[1]!["assets"]![1]!["name"] = "G-EHID.EXE";
+            payload[1]!["body"] = $"g-eHID{separator} 02.11-hid-ABCDE";
             using var client = new HttpClient(new Handler(_ => new(HttpStatusCode.OK) { Content = new StringContent(payload.ToJsonString()) }));
-            using var service = new GitHubUpdateService(new FileLogger(directory, "test"), client, "", ReleaseChannel.Public);
+            using var service = new GitHubUpdateService(new FileLogger(directory, "test"), client, "", ReleaseChannel.Public,
+                installedHidVersion: () => null, installedDpiVersion: () => null);
 
             GitHubRelease? release = await service.CheckAsync(CancellationToken.None);
             string history = await service.DownloadChangelogAsync(null, CancellationToken.None);
@@ -65,7 +69,8 @@ public class UpdateChannelTests
                 Assert.Null(request.Headers.Authorization);
                 return new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(new[] { Release("99.0.0", true), Release("2.0.0", false), Release("98.0.0", false, false) })) };
             }));
-            using var service = new GitHubUpdateService(new FileLogger(directory, "test"), client, "expired-token", ReleaseChannel.Public);
+            using var service = new GitHubUpdateService(new FileLogger(directory, "test"), client, "expired-token", ReleaseChannel.Public,
+                installedHidVersion: () => null, installedDpiVersion: () => null);
 
             GitHubRelease? release = await service.CheckAsync(CancellationToken.None);
 
@@ -92,7 +97,8 @@ public class UpdateChannelTests
                 Assert.Null(request.Headers.Authorization);
                 return new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(new[] { Release(version, false) })) };
             }));
-            using var service = new GitHubUpdateService(new FileLogger(directory, "test"), client, "expired-token", ReleaseChannel.Dev);
+            using var service = new GitHubUpdateService(new FileLogger(directory, "test"), client, "expired-token", ReleaseChannel.Dev,
+                installedHidVersion: () => null, installedDpiVersion: () => null);
 
             GitHubRelease? release = await service.CheckAsync(CancellationToken.None, targetChannel: ReleaseChannel.Public);
 
@@ -116,7 +122,8 @@ public class UpdateChannelTests
                 Assert.Equal("test-token", request.Headers.Authorization?.Parameter);
                 return new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(new[] { Release("99.0.0", true) })) };
             }));
-            using var service = new GitHubUpdateService(new FileLogger(directory, "test"), client, "test-token", ReleaseChannel.Public);
+            using var service = new GitHubUpdateService(new FileLogger(directory, "test"), client, "test-token", ReleaseChannel.Public,
+                installedHidVersion: () => null, installedDpiVersion: () => null);
 
             GitHubRelease? release = await service.CheckAsync(CancellationToken.None, targetChannel: ReleaseChannel.Dev);
 
@@ -139,7 +146,8 @@ public class UpdateChannelTests
                 Assert.Null(request.Headers.Authorization);
                 return new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(new[] { Release("99.0.0", true), Release("2.0.0", false) })) };
             }));
-            using var service = new GitHubUpdateService(new FileLogger(directory, "test"), client, "expired-token", ReleaseChannel.Dev);
+            using var service = new GitHubUpdateService(new FileLogger(directory, "test"), client, "expired-token", ReleaseChannel.Dev,
+                installedHidVersion: () => null, installedDpiVersion: () => null);
 
             string history = await service.DownloadChangelogAsync(null, CancellationToken.None, ReleaseChannel.Public);
 
@@ -171,7 +179,8 @@ public class UpdateChannelTests
                     Release("1.3.11", false), Release("99.0.0", false, false), Release("1.3.12", false)
                 })) };
             }));
-            using var service = new GitHubUpdateService(new FileLogger(directory, "test"), client, "test-token", ReleaseChannel.Dev);
+            using var service = new GitHubUpdateService(new FileLogger(directory, "test"), client, "test-token", ReleaseChannel.Dev,
+                installedHidVersion: () => null, installedDpiVersion: () => null);
 
             string history = await service.DownloadChangelogAsync(null, CancellationToken.None);
 
@@ -196,7 +205,8 @@ public class UpdateChannelTests
                 Assert.Equal("?ref=v1.5.0", request.RequestUri.Query);
                 return new(HttpStatusCode.OK) { Content = new StringContent(archive) };
             }));
-            using var service = new GitHubUpdateService(new FileLogger(directory, "test"), client, "test-token", ReleaseChannel.Public);
+            using var service = new GitHubUpdateService(new FileLogger(directory, "test"), client, "test-token", ReleaseChannel.Public,
+                installedHidVersion: () => null, installedDpiVersion: () => null);
 
             string history = await service.DownloadChangelogAsync("v1.5.0", CancellationToken.None, ReleaseChannel.Dev);
 
@@ -216,7 +226,8 @@ public class UpdateChannelTests
                 Assert.Null(request.Headers.Authorization);
                 return new(HttpStatusCode.OK) { Content = new ByteArrayContent(Encoding.UTF8.GetBytes("invalid executable")) };
             }));
-            using var service = new GitHubUpdateService(new FileLogger(directory, "test"), client, "test-token", ReleaseChannel.Dev);
+            using var service = new GitHubUpdateService(new FileLogger(directory, "test"), client, "test-token", ReleaseChannel.Dev,
+                installedHidVersion: () => null, installedDpiVersion: () => null);
             var release = new GitHubRelease(new Version(98, 0, 0), "v98.0.0", "", new Uri("https://api.github.com/repos/loismedia/g-eBAR/releases/assets/1"), true,
                 null, null, false, false, true, new string('0', 64), TargetChannel: ReleaseChannel.Public);
 
@@ -232,17 +243,6 @@ public class UpdateChannelTests
     {
         string directory = Path.Combine(Path.GetTempPath(), $"gebar-rollback-{Guid.NewGuid():N}");
         string current = typeof(AppSettings).Assembly.GetName().Version!.ToString(3);
-        object ModuleRelease(string version, bool nightly, bool app, string? date) => new
-        {
-            tag_name = "v" + version, draft = false, prerelease = nightly,
-            body = date is null ? "App only" : $"g-eHID: {date}-hid-ABCDE\ng-eDPI: {date}-dpi-ABCDE",
-            assets = new[]
-            {
-                new { name = app ? "g-eBAR.exe" : "other.exe", url = "https://api.github.com/app" },
-                new { name = date is null ? "other.bin" : "g-eHID.exe", url = "https://api.github.com/hid" },
-                new { name = date is null ? "other.dll" : "g-eDPI.dll", url = "https://api.github.com/dpi" }
-            }
-        };
         try
         {
             string json = JsonSerializer.Serialize(new[]
@@ -253,10 +253,10 @@ public class UpdateChannelTests
                 ModuleRelease("0.9.0", false, false, stableModulesAvailable ? "01.11" : null)
             });
             using var client = new HttpClient(new Handler(_ => new(HttpStatusCode.OK) { Content = new StringContent(json) }));
-            using var service = new GitHubUpdateService(new FileLogger(directory, "test"), client, "", ReleaseChannel.Dev);
+            using var service = new GitHubUpdateService(new FileLogger(directory, "test"), client, "", ReleaseChannel.Dev,
+                installedHidVersion: () => "05.11-hid-ABCDE", installedDpiVersion: () => "05.11-dpi-ABCDE", currentBuildNightly: true);
 
-            GitHubRelease? release = await service.CheckAsync(CancellationToken.None, allowStableRollback: true,
-                targetChannel: GitHubUpdateService.IsCurrentBuildNightly ? null : ReleaseChannel.Public);
+            GitHubRelease? release = await service.CheckAsync(CancellationToken.None, allowStableRollback: true);
 
             Assert.NotNull(release);
             Assert.True(release.IsDowngrade);
@@ -269,4 +269,67 @@ public class UpdateChannelTests
         }
         finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
     }
+
+    [Theory]
+    [InlineData(ReleaseChannel.Public)]
+    [InlineData(ReleaseChannel.Dev)]
+    public async Task ChannelSwitchReplacesInstalledModulesEvenWhenVersionsMatch(ReleaseChannel target)
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"gebar-module-switch-{Guid.NewGuid():N}");
+        try
+        {
+            using var client = new HttpClient(new Handler(request =>
+            {
+                Assert.Contains("/" + BuildChannel.Repository(target) + "/", request.RequestUri!.AbsolutePath);
+                return new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(new[] { ModuleRelease("99.0.0", false, true, "01.11") })) };
+            }));
+            using var service = new GitHubUpdateService(new FileLogger(directory, "test"), client, "",
+                target == ReleaseChannel.Public ? ReleaseChannel.Dev : ReleaseChannel.Public,
+                installedHidVersion: () => "01.11-hid-ABCDE",
+                installedDpiVersion: () => "01.11-dpi-ABCDE");
+
+            GitHubRelease? release = await service.CheckAsync(CancellationToken.None, targetChannel: target);
+
+            Assert.NotNull(release);
+            Assert.Equal(target, release.TargetChannel);
+            Assert.True(release.HidUpdateAvailable);
+            Assert.True(release.DpiUpdateAvailable);
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    public async Task ChannelSwitchRequiresTargetPackagesOnlyForInstalledModules(bool hidInstalled, bool dpiInstalled, bool fails)
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"gebar-module-missing-{Guid.NewGuid():N}");
+        try
+        {
+            using var client = new HttpClient(new Handler(_ => new(HttpStatusCode.OK)
+                { Content = new StringContent(JsonSerializer.Serialize(new[] { ModuleRelease("99.0.0", false, true, null) })) }));
+            using var service = new GitHubUpdateService(new FileLogger(directory, "test"), client, "", ReleaseChannel.Dev,
+                installedHidVersion: () => hidInstalled ? "old-hid" : null,
+                installedDpiVersion: () => dpiInstalled ? "old-dpi" : null);
+
+            GitHubRelease? release = await service.CheckAsync(CancellationToken.None, targetChannel: ReleaseChannel.Public);
+
+            Assert.Equal(fails, release is null);
+            Assert.Equal(fails, service.LastCheckFailed);
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
+
+    private static object ModuleRelease(string version, bool nightly, bool app, string? date) => new
+    {
+        tag_name = "v" + version, draft = false, prerelease = nightly,
+        body = date is null ? "App only" : $"g-eHID: {date}-hid-ABCDE\ng-eDPI: {date}-dpi-ABCDE",
+        assets = new[]
+        {
+            new { name = app ? "g-eBAR.exe" : "other.exe", url = "https://api.github.com/app" },
+            new { name = date is null ? "other.bin" : "g-eHID.exe", url = "https://api.github.com/hid" },
+            new { name = date is null ? "other.dll" : "g-eDPI.dll", url = "https://api.github.com/dpi" }
+        }
+    };
 }

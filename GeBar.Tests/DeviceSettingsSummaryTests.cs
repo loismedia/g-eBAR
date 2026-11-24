@@ -149,11 +149,21 @@ public class DeviceSettingsSummaryTests
         using var module = new DpiModule(new TestLogger(), [new Driver()]);
         await module.SetDeviceAsync(Device, CancellationToken.None);
         Assert.NotNull(module.CurrentSettings);
+        TextBlock support = Assert.Single(Descendants(module.View).OfType<TextBlock>(), text => text.ToolTip is string);
+        Assert.Equal(GeBar.Dpi.Strings.Supported, support.ToolTip);
+        Assert.Equal("\uE73E", support.Text);
+        Assert.Same(System.Windows.Media.Brushes.MediumSeaGreen, support.Foreground);
 
         await module.SetDeviceAsync(Device with { Id = "unsupported" }, CancellationToken.None);
 
         Assert.Null(module.CurrentSettings);
         Assert.False(module.CanSave);
+        Assert.Equal(GeBar.Dpi.Strings.Unsupported, support.ToolTip);
+        Assert.Equal("\uE711", support.Text);
+        Assert.Same(System.Windows.Media.Brushes.IndianRed, support.Foreground);
+        Assert.DoesNotContain(Descendants(module.View).OfType<TextBlock>(), text => text.Text == GeBar.Dpi.Strings.Unsupported);
+        await module.SetDeviceAsync(null, CancellationToken.None);
+        Assert.Equal(Visibility.Collapsed, support.Visibility);
     });
 
     [Fact]

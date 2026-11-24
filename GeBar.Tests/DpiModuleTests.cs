@@ -6,6 +6,7 @@ using System.Runtime.ExceptionServices;
 using System.Runtime.Loader;
 using System.Windows;
 using System.Windows.Controls;
+using System.Diagnostics;
 
 namespace GeBar.Tests;
 
@@ -25,7 +26,7 @@ public class DpiModuleTests
             IReadOnlyList<ControlCenterWindow.ModuleInfo> entries = ControlCenterWindow.ModuleEntries(hid, dpi);
             Assert.Equal(expected, entries.Select(entry => entry.Text));
             Assert.Equal(GeBar.App.Strings.ModuleImpactHint, entries[^1].ToolTip);
-            Assert.All(entries.Take(entries.Count - 1), entry => Assert.Null(entry.ToolTip));
+            Assert.All(entries, entry => Assert.False(string.IsNullOrWhiteSpace(entry.ToolTip)));
         }
     }
 
@@ -91,6 +92,44 @@ public class DpiModuleTests
             finally { window.Close(); }
         }
         finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    });
+
+    [Fact]
+    public void ComboBoxItemsKeepAlignmentWhenOpenedAndReplaced() => Sta(() =>
+    {
+        using var messages = new StringWriter();
+        using var listener = new TextWriterTraceListener(messages);
+        TraceSource bindings = PresentationTraceSources.DataBindingSource;
+        SourceLevels previous = bindings.Switch.Level;
+        bindings.Switch.Level = SourceLevels.Error;
+        bindings.Listeners.Add(listener);
+        var combo = new ComboBox { ItemsSource = new[] { "First", "Second" }, SelectedIndex = 0 };
+        var window = new Window { Content = combo, Width = 240, Height = 100, Left = -10000, Top = -10000,
+            ShowActivated = false, ShowInTaskbar = false };
+        try
+        {
+            window.Resources.MergedDictionaries.Add(new ResourceDictionary { Source = AppTheme.ThemeSource });
+            window.Show();
+            combo.IsDropDownOpen = true;
+            window.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            var item = Assert.IsType<ComboBoxItem>(combo.ItemContainerGenerator.ContainerFromIndex(0));
+            Assert.False(System.Windows.Data.BindingOperations.IsDataBound(item, Control.HorizontalContentAlignmentProperty));
+            Assert.False(System.Windows.Data.BindingOperations.IsDataBound(item, Control.VerticalContentAlignmentProperty));
+            combo.ItemsSource = new[] { "Third", "Fourth" };
+            combo.SelectedIndex = 1;
+            window.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            combo.IsDropDownOpen = false;
+            window.Content = null;
+            window.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            Assert.DoesNotContain(messages.ToString().Split('\n'), line => line.Contains("ComboBoxItem", StringComparison.Ordinal)
+                && (line.Contains("HorizontalContentAlignment", StringComparison.Ordinal) || line.Contains("VerticalContentAlignment", StringComparison.Ordinal)));
+        }
+        finally
+        {
+            window.Close();
+            bindings.Listeners.Remove(listener);
+            bindings.Switch.Level = previous;
+        }
     });
 
     [Fact]

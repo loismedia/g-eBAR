@@ -8,13 +8,15 @@ namespace GeBar.Tests;
 
 public class DpiUpdateTests
 {
-    [Fact]
-    public async Task LatestModuleCanComeFromEarlierAppRelease()
+    [Theory]
+    [InlineData(":")]
+    [InlineData("")]
+    public async Task LatestModuleCanComeFromEarlierAppRelease(string separator)
     {
         string directory = Path.Combine(Path.GetTempPath(), $"gebar-dpi-update-{Guid.NewGuid():N}");
         try
         {
-            var payload = new[] { Release("99.0.1", false), Release("99.0.0", true) };
+            var payload = new[] { Release("99.0.1", false, separator), Release("99.0.0", true, separator) };
             using var client = new HttpClient(new Handler(JsonSerializer.Serialize(payload)));
             using var service = new GitHubUpdateService(new FileLogger(directory, "test"), client, string.Empty, ReleaseChannel.Dev);
 
@@ -30,12 +32,12 @@ public class DpiUpdateTests
         finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
     }
 
-    private static object Release(string version, bool dpi) => new
+    private static object Release(string version, bool dpi, string separator) => new
     {
         tag_name = "v" + version,
         draft = false,
         prerelease = false,
-        body = dpi ? "g-eDPI: 03.11-dpi-ABCDE" : "App fixes",
+        body = dpi ? $"g-eDPI{separator} 03.11-dpi-ABCDE" : "App fixes",
         assets = new[]
         {
             new { name = "g-eBAR.exe", url = "https://api.github.com/repos/loismedia/pg/releases/assets/1", digest = "sha256:" + new string('A', 64) },
