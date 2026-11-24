@@ -102,7 +102,7 @@ internal static class Strings
     public static string DeviceMetadata(int vid, int pid, string? manufacturer, int interfaces) => Ru ? $"VID={vid:X4}  PID={pid:X4}  Производитель: {manufacturer ?? "неизвестен"}  Интерфейсов: {interfaces}" : $"VID={vid:X4}  PID={pid:X4}  Manufacturer: {manufacturer ?? "unknown"}  Interfaces: {interfaces}";
     public static string InterfaceOpened => Ru ? "Интерфейс открыт, входящие пакеты пишутся в журнал." : "Interface opened, incoming packets are being logged.";
     public static string CheckingBattery => Ru ? "Проверяю стандартные HID battery usages и известные протоколы…" : "Checking standard HID battery usages and known protocols…";
-    public static string BatteryFound(int value, bool? charging, string? detail) => Ru ? $"Найден заряд: {value}%{ChargeState(charging)} · {detail}. Профиль готов к экспорту." : $"Battery found: {value}%{ChargeState(charging)} · {detail}. The profile is ready to export.";
+    public static string BatteryFound(int value, bool? charging, string? detail) => Ru ? $"Найден заряд: {value}%{ChargeState(charging)}, {detail}. Профиль готов к экспорту." : $"Battery found: {value}%{ChargeState(charging)}, {detail}. The profile is ready to export.";
     public static string PassiveCaptureStarted => Ru ? "Стандартное поле заряда не ответило. Запущен пассивный захват первого доступного HID-интерфейса." : "The standard battery field did not respond. Passive capture started on the first available HID interface.";
     public static string NoInputInterface => Ru ? "Захват для этого устройства недоступен: интерфейсы заняты Windows или фирменной программой." : "Capture is unavailable for this device: the interfaces are held by Windows or a vendor application.";
     public static string ExportTitle => Ru ? "Экспорт профиля g-eHID" : "Export g-eHID profile";
@@ -122,7 +122,7 @@ internal static class Strings
     public static string SweepStopped => Ru ? "Перебор остановлен." : "Sweep stopped.";
     public static string SweepUnavailable => Ru ? "У устройства нет вендорского интерфейса 65/65, перебирать нечего." : "The device has no 65/65 vendor interface, nothing to sweep.";
 
-    public static string InterfacePath(int index, string path) => Ru ? $"Интерфейс {index} · {path}" : $"Interface {index} · {path}";
+    public static string InterfacePath(int index, string path) => Ru ? $"Интерфейс {index}, {path}" : $"Interface {index}, {path}";
 
-    private static string ChargeState(bool? charging) => charging is null ? string.Empty : charging.Value ? Ru ? " · заряжается" : " · charging" : Ru ? " · разряжается" : " · discharging";
+    private static string ChargeState(bool? charging) => charging is null ? string.Empty : charging.Value ? Ru ? ", заряжается" : ", charging" : Ru ? ", разряжается" : ", discharging";
 }

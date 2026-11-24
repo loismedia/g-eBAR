@@ -961,11 +961,11 @@ internal partial class MainWindow : Window
         public bool HasPendingChanges => IsAdded && Profile != _savedProfile;
         public void MarkSaved() => _savedProfile = Profile;
         public string Name => Profile.DisplayName;
-        public string Identifier => (IsBuiltIn ? Strings.BuiltIn + " · " : string.Empty)
-            + (IsOnline ? string.Empty : Strings.DeviceOffline + " · ")
+        public string Identifier => (IsBuiltIn ? Strings.BuiltIn + ", " : string.Empty)
+            + (IsOnline ? string.Empty : Strings.DeviceOffline + ", ")
             + (Profile.Connections is { Count: > 0 }
                 ? string.Join(" + ", Profile.AllConnections().Select(connection => $"{connection.VendorId:X4}:{connection.ProductId:X4}"))
-                : $"{Profile.VendorId:X4}:{Profile.ProductId:X4} · {Profile.Interfaces.Count} HID");
+                : $"{Profile.VendorId:X4}:{Profile.ProductId:X4}, {Profile.Interfaces.Count} HID");
         public IReadOnlyList<InterfaceItem> Interfaces =>
         [
             .. Profile.AllConnections()
@@ -994,7 +994,7 @@ internal partial class MainWindow : Window
         public int Index { get; }
         public string? Connection { get; }
         public bool IsPresent { get; }
-        public string ShortPath => (Connection is null ? string.Empty : $"{Connection} · ") + Strings.InterfacePath(Index, Profile.DevicePath);
+        public string ShortPath => (Connection is null ? string.Empty : $"{Connection}, ") + Strings.InterfacePath(Index, Profile.DevicePath);
         public string ReportSizes => $"IN {Profile.InputReportLength} / OUT {Profile.OutputReportLength} / F {Profile.FeatureReportLength}";
     }
 }
