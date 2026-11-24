@@ -10,6 +10,8 @@ A wireless device battery monitor for Windows. Displays the selected device's ba
 
 **g-eHID** is the companion module: it discovers HID devices, identifies their battery protocol and creates profiles for g-eBAR.
 
+**g-eDPI** is an optional module for mouse settings and SmartSaver, available starting with public version 1.4.2.
+
 | | |
 |---|---|
 | Version | 1.4.x |
@@ -24,10 +26,11 @@ A wireless device battery monitor for Windows. Displays the selected device's ba
 2. Double-click the tray icon to open the control center. The built-in profile is for Logitech G PRO X 2.
 3. To add another device, open the update window and install g-eHID. In g-eHID, select your device, click **Detect battery**, then **Add to g-eBAR**.
 4. Return to g-eBAR, refresh the device list and select your device. Profiles are also reloaded automatically.
+5. To configure a supported mouse, install g-eDPI from the update window and open the **g-eDPI** tab. See [Mouse settings and SmartSaver](#mouse-settings-and-smartsaver).
 
 ## Device support
 
-✅ Tested on hardware · 🔄 Implemented, needs testing · ➖ Not supported yet
+✅ Tested on hardware; 🔄 Implemented, needs testing; ➖ Not supported yet
 
 | Devices | Battery source | Readiness |
 |---|---|---|
@@ -48,6 +51,20 @@ Waizowl wired support uses the `8C 01 00` battery marker from tester logs. Windo
 Protocols are matched by Input, Output and Feature report sizes. Vendor IDs only affect the order of probing. Commands are sent to vendor collections (`UsagePage >= 0xFF00`); standard keyboard and mouse collections are excluded. Responses are checked for empty data, echo signatures and consistent repeated readings.
 
 If a stored protocol stops responding, g-eBAR tries the known protocols again. After three unsuccessful scans, full probing pauses for 30 minutes while the stored request continues to be tried; during the first 10 minutes after startup, the pause is limited to 30 seconds. Manual refresh or a change in connected interfaces resets the pause. Older profiles are normalized against the protocol catalog without requiring re-creation.
+
+## Mouse settings and SmartSaver
+
+g-eDPI includes settings drivers for WLMOUSE HUAN through its receiver or USB cable, and selected Waizowl OGM variants. Available settings and limits depend on the model and connection:
+
+- DPI, polling rate and lift-off distance.
+- Sleep timeout and sensor modes such as Speed and Turbo, where supported.
+- SmartSaver for automatic polling rate changes.
+
+Select the mouse on the home page, open **g-eDPI**, adjust the values and click **Save** to write them to the mouse. A green check next to the device name indicates settings support. A red cross indicates that settings are not supported yet; hover over it for details. If the mouse is asleep, wake it and click refresh to read its settings.
+
+SmartSaver is off by default. When enabled and saved, it lowers polling to **125 Hz** on the desktop and uses your selected rate in fullscreen applications. Browsers and known video players are excluded. Saving resumes three seconds after leaving fullscreen, and also works while charging. The control center adds **(SS)** to the current polling rate while SmartSaver is active.
+
+SmartSaver settings are stored in `%LocalAppData%\g-eBAR\smartsaver.json`. Install g-eDPI from the update window and remove it from the About page.
 
 ## Charging and sleep
 
@@ -85,7 +102,7 @@ Settings are stored in `%LocalAppData%\g-eBAR\settings.json`.
 |---|---|---|
 | `SelectedDeviceId` | `built-in` | Selected device |
 | `StartWithWindows` | `false` | Start with Windows |
-| `RefreshIntervalSeconds` | `60` | Polling interval, 15–86400 seconds |
+| `RefreshIntervalSeconds` | `60` | Polling interval, 15-86400 seconds |
 | `HistoryHours` | `24` | Graph period: `24` or `168` hours |
 | `NotifyLowBattery` | `true` | Low battery notifications |
 | `NotifyChargingConnected` | `true` | Charging started notifications |
@@ -93,8 +110,8 @@ Settings are stored in `%LocalAppData%\g-eBAR\settings.json`.
 | `ShowAllDevicesInTrayTooltip` | `false` | Show all battery levels in the tray tooltip |
 | `NotifyAllDevices` | `false` | Notify for all monitored devices |
 | `AutoSwitchDevice` | `true` | Select an available device when the current one disconnects |
-| `WarningThreshold` | `20` | Warning level, 5–50% |
-| `CriticalThreshold` | `10` | Critical level, 1–49%, below the warning level |
+| `WarningThreshold` | `20` | Warning level, 5-50% |
+| `CriticalThreshold` | `10` | Critical level, 1-49%, below the warning level |
 | `IconStyle` | `Battery` | `Battery` or `Percentage` |
 | `TrayIconScale` | `2` | Small (`1`), normal (`2`) or large (`3`) |
 | `NormalColorArgb` | `#00BCD4` | Normal battery color, stored as an ARGB integer |
@@ -104,7 +121,7 @@ Settings are stored in `%LocalAppData%\g-eBAR\settings.json`.
 
 Out-of-range values are clamped when loaded. Public and dev share settings and profiles. Extra developer data lives in `dev` objects and is preserved by public builds, along with unknown JSON fields. Profiles use shared format version 2.
 
-Public updates do not require a GitHub token. To access dev, hold Ctrl and double-click the version on the About page, enter a token with read access to the dev repository and select **Switch to dev**. Dev provides **Return to public version** without requiring a token. Switching preserves data and replaces an installed g-eHID module with its counterpart from the target channel. Tokens are stored in Windows Credential Manager as `g-eBAR/GitHub`, never in configuration files.
+Public updates do not require a GitHub token. To access dev, hold Ctrl and double-click the version on the About page, enter a token with read access to the dev repository and select **Switch to dev**. Dev provides **Return to public version** without requiring a token. Switching preserves data and replaces installed g-eHID and g-eDPI modules with their counterparts from the target channel. Tokens are stored in Windows Credential Manager as `g-eBAR/GitHub`, never in configuration files.
 
 ## Diagnostics and bug reports
 
