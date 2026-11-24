@@ -22,16 +22,23 @@ internal sealed partial class GitHubUpdateService : IDisposable
     private string? _lastComplaint;
     private readonly HttpClient _client;
     private readonly ReleaseChannel _currentChannel;
+    private readonly Func<string?> _installedHidVersion;
+    private readonly Func<string?> _installedDpiVersion;
+    private readonly bool _currentBuildNightly;
     private string _token;
 
     public GitHubUpdateService(FileLogger logger) : this(logger, new HttpClient(), null, BuildChannel.Current) { }
 
-    internal GitHubUpdateService(FileLogger logger, HttpClient client, string? token, ReleaseChannel currentChannel)
+    internal GitHubUpdateService(FileLogger logger, HttpClient client, string? token, ReleaseChannel currentChannel,
+        Func<string?>? installedHidVersion = null, Func<string?>? installedDpiVersion = null, bool? currentBuildNightly = null)
     {
         _logger = logger;
         _client = client;
         _client.Timeout = TimeSpan.FromSeconds(15);
         _currentChannel = currentChannel;
+        _installedHidVersion = installedHidVersion ?? GetInstalledHidVersion;
+        _installedDpiVersion = installedDpiVersion ?? GetInstalledDpiVersion;
+        _currentBuildNightly = currentBuildNightly ?? IsCurrentBuildNightly;
         _token = token ?? ReadToken();
         string version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "1.0.0";
         _client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("g-eBAR", version));
@@ -166,7 +173,7 @@ internal sealed partial class GitHubUpdateService : IDisposable
             Version current = Assembly.GetExecutingAssembly().GetName().Version ?? new Version(1, 0);
             if (current.Revision == 0) current = new Version(current.Major, current.Minor, current.Build);
             bool isDowngrade = switching && version < current;
-            if (!switching && version <= current && allowStableRollback && IsCurrentBuildNightly)
+            if (!switching && version <= current && allowStableRollback && _currentBuildNightly)
             {
                 foreach (var stable in versionedReleases.Where(item => !item.Release.GetProperty("prerelease").GetBoolean() && item.Version < current))
                 {
@@ -186,16 +193,20 @@ internal sealed partial class GitHubUpdateService : IDisposable
             if (isDowngrade && !isNightly)
                 moduleReleases = Versioned(releases).Where(item => !item.Release.GetProperty("prerelease").GetBoolean() && item.Version <= version)
                     .OrderByDescending(item => item.Version).Select(item => item.Release).ToArray();
-            (string? hidVersion, JsonElement? hidAsset) = FindModule(moduleReleases, "g-eHID.exe", @"g-eHID:\s*(?<version>\d{2}\.\d{2}-hid-[A-Za-z0-9]{5})");
+            (string? hidVersion, JsonElement? hidAsset) = FindModule(moduleReleases, "g-eHID.exe", @"g-eHID:?\s*(?<version>\d{2}\.\d{2}-hid-[A-Za-z0-9]{5})");
             Uri? hidDownloadUri = AssetUri(hidAsset);
+            string? installedHidVersion = _installedHidVersion();
             bool hidUpdateAvailable = hidVersion is not null && hidDownloadUri is not null
-                && (switching || !string.Equals(GetInstalledHidVersion(), hidVersion, StringComparison.OrdinalIgnoreCase));
-            if (switching && GetInstalledHidVersion() is not null && !hidUpdateAvailable)
+                && (switching || !string.Equals(installedHidVersion, hidVersion, StringComparison.OrdinalIgnoreCase));
+            if (switching && installedHidVersion is not null && !hidUpdateAvailable)
                 throw new InvalidOperationException("The target channel has no compatible g-eHID module.");
-            (string? dpiVersion, JsonElement? dpiAsset) = FindModule(moduleReleases, "g-eDPI.dll", @"g-eDPI:\s*(?<version>\d{2}\.\d{2}-dpi-[A-Za-z0-9]{5})");
+            (string? dpiVersion, JsonElement? dpiAsset) = FindModule(moduleReleases, "g-eDPI.dll", @"g-eDPI:?\s*(?<version>\d{2}\.\d{2}-dpi-[A-Za-z0-9]{5})");
             Uri? dpiDownloadUri = AssetUri(dpiAsset);
+            string? installedDpiVersion = _installedDpiVersion();
             bool dpiUpdateAvailable = dpiVersion is not null && dpiDownloadUri is not null
-                && (!switching && !string.Equals(GetInstalledDpiVersion(), dpiVersion, StringComparison.OrdinalIgnoreCase) || switching && channel == ReleaseChannel.Dev);
+                && (switching || !string.Equals(installedDpiVersion, dpiVersion, StringComparison.OrdinalIgnoreCase));
+            if (switching && installedDpiVersion is not null && !dpiUpdateAvailable)
+                throw new InvalidOperationException("The target channel has no compatible g-eDPI module.");
             if (!appUpdateAvailable && !hidUpdateAvailable && !dpiUpdateAvailable) return null;
             return new(version, tag, root.GetProperty("body").GetString() ?? string.Empty, downloadUri, appUpdateAvailable, hidVersion, hidDownloadUri, hidUpdateAvailable, isNightly, isDowngrade, AssetDigest(asset), AssetDigest(hidAsset), switching ? channel : null,
                 dpiVersion, dpiDownloadUri, dpiUpdateAvailable, AssetDigest(dpiAsset));

@@ -13,8 +13,8 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
-        <TextBlock x:Name="HintText" Grid.Row="1" Foreground="{DynamicResource SecondaryText}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"/>
-        <Border x:Name="RawWarning" Grid.Row="2" Margin="0,0,0,10" Padding="12,9" CornerRadius="7" Background="#26FFB300" Visibility="Collapsed">
+        <TextBlock x:Name="HintText" Grid.Row="2" Foreground="{DynamicResource SecondaryText}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"/>
+        <Border x:Name="RawWarning" Grid.Row="1" Margin="0,0,0,10" Padding="12,9" CornerRadius="7" Background="#26FFB300" Visibility="Collapsed">
             <TextBlock x:Name="RawWarningText" Foreground="#FFFFC247" TextWrapping="Wrap"/>
         </Border>
         <TextBox x:Name="DescriptionBox" Grid.Row="3" MaxLength="2000" Height="110"

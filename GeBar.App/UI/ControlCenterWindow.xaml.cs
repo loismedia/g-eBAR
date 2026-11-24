@@ -422,13 +422,13 @@ internal partial class ControlCenterWindow : Window
         if (_deviceOptions.Length > 0) RefreshModuleDevice();
     }
 
-    internal sealed record ModuleInfo(string Text, string? ToolTip = null);
+    internal sealed record ModuleInfo(string Text, string ToolTip);
 
     internal static IReadOnlyList<ModuleInfo> ModuleEntries(string? hidVersion, string? dpiVersion)
     {
         var modules = new List<ModuleInfo>();
-        if (hidVersion is not null) modules.Add(new(Strings.HidVersion(hidVersion)));
-        if (dpiVersion is not null) modules.Add(new($"g-eDPI {dpiVersion}"));
+        if (hidVersion is not null) modules.Add(new(Strings.HidVersion(hidVersion), Strings.HidModuleHint));
+        if (dpiVersion is not null) modules.Add(new($"g-eDPI {dpiVersion}", Strings.DpiModuleHint));
         if (modules.Count > 0)
         {
             string version = typeof(ControlCenterWindow).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
@@ -562,7 +562,7 @@ internal partial class ControlCenterWindow : Window
                 FontSize = 11,
                 ToolTip = offline
                     ? Strings.OfflineCharge(before.Percentage, after.Percentage, after.Time.LocalDateTime)
-                    : $"{(current == true ? Strings.ChargingStarted : Strings.ChargingStopped)} — {after.Time.LocalDateTime:dd.MM HH:mm}"
+                    : $"{(current == true ? Strings.ChargingStarted : Strings.ChargingStopped)} - {after.Time.LocalDateTime:dd.MM HH:mm}"
             };
             Canvas.SetLeft(marker, Math.Clamp(points[index].X - 7, 0, Math.Max(0, width - 14)));
             Canvas.SetTop(marker, Math.Clamp(points[index].Y - 17, 0, Math.Max(0, height - 15)));

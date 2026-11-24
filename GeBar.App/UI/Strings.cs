@@ -10,9 +10,15 @@ internal static class Strings
     public static string AppName => "g-eBAR";
     public static string HidName => "g-eHID";
     public static string Modules => Ru ? "Модули" : "Modules";
+    public static string HidModuleHint => Ru
+        ? "Диагностика HID-устройств и создание профилей для мониторинга заряда."
+        : "HID device diagnostics and profile creation for battery monitoring.";
+    public static string DpiModuleHint => Ru
+        ? "Настройка поддерживаемых мышей: DPI, частота опроса, питание и SmartSaver."
+        : "Settings for supported mice: DPI, polling rate, power and SmartSaver.";
     public static string ModuleImpactHint => Ru
-        ? "[Транзитивный] Общий компонент для сборки/оптимизации модулей."
-        : "[Transitive] Сommon component for building/optimizing modules.";
+        ? "[Транзитивный] Анализатор изменений для выбора модулей при сборке. На компьютер не устанавливается."
+        : "[Transitive] Change analyzer used to select modules during builds. It is not installed on your computer.";
     public static string DpiReleaseUnavailable => Ru ? "g-eDPI недоступен в этом релизе" : "g-eDPI is unavailable in this release";
     public static string ModulesInstalled => Ru ? "Модули установлены." : "Modules have been installed.";
     public static string RemoveDpi => Ru ? "Удалить g-eDPI" : "Remove g-eDPI";
@@ -23,7 +29,7 @@ internal static class Strings
     public static string HidAvailableVersion(string value) => Ru ? $"Доступна версия g-eHID: {value}" : $"g-eHID version available: {value}";
     public static string HidInstallHint => Ru ? "g-eHID не установлен. Откройте «Обновление» и отметьте g-eHID." : "g-eHID is not installed. Open Check for updates and select g-eHID.";
     public static string HidRemoveError => Ru ? "Не удалось удалить g-eHID." : "Could not remove g-eHID.";
-    public static string EmptyValue => "—";
+    public static string EmptyValue => "-";
     public static string Saving => Ru ? "Сохранение…" : "Saving…";
     public static string Saved => Ru ? "Сохранено" : "Saved";
     public static string Charge => Ru ? "Заряд" : "Battery";
